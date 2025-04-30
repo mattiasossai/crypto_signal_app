@@ -1,0 +1,13 @@
+name: crypto_signal_app
+description: Eine Flutter-App zum Empfangen und Anzeigen von Krypto-Entry-Signalen
+version: 1.0.0+1
+
+environment:
+  sdk: ">=2.17.0 <3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^0.13.5
+  flutter_local_notifications: ^12.0.0
+  cupertino_icons: ^1.0.2
