@@ -54,7 +54,6 @@ def load_historical(symbol: str, interval: str, date: str) -> pd.DataFrame | Non
     return df[['c','v']]
 
 def build_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame | None:
-    """Berechnet alle Indikatoren, gibt None zurück bei unzureichenden Daten."""
     try:
         bb   = ta.bbands(df['c'], length=20, std=2)
         rsi  = ta.rsi(df['c'], length=14)
@@ -64,10 +63,8 @@ def build_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame | None:
     except Exception:
         return None
 
-    # Falls macd oder bb None oder fehlende Spalten
-    if macd is None or bb is None:
-        return None
-    if 'MACD_12_26_9' not in macd or 'BBU_20_2.0' not in bb:
+    # Prüfen, ob Indikatoren erzeugt wurden
+    if macd is None or bb is None or 'MACD_12_26_9' not in macd:
         return None
 
     feat = pd.DataFrame({
@@ -82,15 +79,16 @@ def build_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame | None:
         f"{prefix}_bb_low": bb['BBL_20_2.0'],
     }).dropna()
 
-    # Nur zurückgeben, wenn genug Zeilen übrig sind
     return feat if len(feat) > 50 else None
 
 # === 1) Daten sammeln + Features bauen ===
 all_frames = []
+
 for sym in SYMBOLS:
-    per_symbol = []
+    feats_per_interval: dict[str, pd.DataFrame] = {}
+
     for iv in INTERVALS:
-        feats_list = []
+        daily_feats = []
         for dt in DATES:
             hist = load_historical(sym, iv, dt)
             if hist is None:
@@ -98,33 +96,42 @@ for sym in SYMBOLS:
             feats = build_features(hist, iv)
             if feats is None:
                 continue
-            feats_list.append(feats)
-        if not feats_list:
+            daily_feats.append(feats)
+
+        if not daily_feats:
             print(f"⚠️ {sym} {iv}: keine validen Tages-Features")
             continue
-        merged_iv = pd.concat(feats_list).drop_duplicates().iloc[-5000:]
-        per_symbol.append(merged_iv)
-    if not per_symbol:
-        print(f"⚠️ {sym}: keine Daten über alle Intervalle")
+
+        merged_iv = pd.concat(daily_feats).drop_duplicates().iloc[-5000:]
+        feats_per_interval[iv] = merged_iv
+
+    # Wenn nicht alle Intervalle da sind ODER speziell 1h fehlt, überspringen
+    if set(feats_per_interval.keys()) < set(INTERVALS):
+        missing = set(INTERVALS) - set(feats_per_interval.keys())
+        print(f"⚠️ {sym}: fehlt Intervalle {missing} → übersprungen")
         continue
-    df_sym = pd.concat(per_symbol, axis=1, join='inner').dropna()
+
+    # === 2) Symbol-spezifisches DataFrame ===
+    df_sym = pd.concat(feats_per_interval.values(), axis=1, join='inner').dropna()
     df_sym['future'] = df_sym['1h_c'].shift(-1)
     df_sym.dropna(inplace=True)
     df_sym['label'] = (
         (df_sym['future'] - df_sym['1h_c']) / df_sym['1h_c']
     ).apply(lambda x: 2 if x > 0.01 else (0 if x < -0.01 else 1))
+
     all_frames.append(df_sym)
 
-# === 2) Validierung ===
+# === 3) Validierung ===
 if not all_frames:
     print("⚠️ Kein Trainings-Frame erstellt. Abbruch.")
     sys.exit(1)
+
 data = pd.concat(all_frames).dropna()
 if data.empty:
     print("⚠️ Kombinierte Daten sind leer. Abbruch.")
     sys.exit(1)
 
-# === 3) Features/Labels auftrennen ===
+# === 4) Features / Labels ===
 feature_cols = [c for c in data.columns if c not in ['future','label']]
 X = data[feature_cols].values
 y = tf.keras.utils.to_categorical(data['label'], num_classes=3)
@@ -135,7 +142,7 @@ Xtr, Xvl, ytr, yvl = train_test_split(
     X_scaled, y, test_size=0.2, random_state=42
 )
 
-# === 4) Modell bauen & trainieren ===
+# === 5) Modell bauen & trainieren ===
 model = tf.keras.Sequential([
     tf.keras.layers.Input(shape=(Xtr.shape[1],)),
     tf.keras.layers.Dense(128, activation='relu'),
@@ -150,10 +157,11 @@ model.compile(
 )
 model.fit(Xtr, ytr, validation_data=(Xvl, yvl), epochs=30, batch_size=256)
 
-# === 5) Speichern ===
+# === 6) Speichern ===
 model.save('model.keras')
 with open('scaler.pkl', 'wb') as f:
     pickle.dump(scaler, f)
+
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_model = converter.convert()
 with open('model.tflite', 'wb') as f:
