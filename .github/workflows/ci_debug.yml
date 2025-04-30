@@ -1,40 +1,37 @@
-name: "CI – Debug Train Outputs"
+name: CI – Train & Convert Model
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - 'train/**'
   workflow_dispatch:
 
 jobs:
-  debug:
-    name: "🏷️ Train & Debug Paths"
+  train:
     runs-on: ubuntu-latest
-
     steps:
-      - name: "Checkout code"
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: "Set up Python 3.10"
+      - name: Setup Python 3.10
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
-      - name: "Install training dependencies"
+      - name: Install train deps
         run: pip install -r train/requirements.txt
 
-      - name: "Run train.py"
-        working-directory: train
-        run: python train.py
+      - name: Run training & conversion
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
+        run: python train/train.py
 
-      - name: "🚩 Debug: Root directory"
-        run: |
-          echo "=== Root directory contents ==="
-          ls -la .
-
-      - name: "🚩 Debug: train/ directory"
-        run: |
-          echo "=== train/ directory contents ==="
-          ls -la train/
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: model-files
+          path: |
+            model.keras
+            scaler.pkl
+            model.tflite
