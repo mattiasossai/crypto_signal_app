@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
-
   train:
     name: 🏋️‍♂️ Train & Export Model
     runs-on: ubuntu-latest
@@ -28,12 +27,12 @@ jobs:
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
 
-      - name: Debug: List repo root
+      - name: 'Debug: List repo root'
         run: |
           echo "=== Repo root contents ==="
           ls -la .
 
-      - name: Debug: List train directory
+      - name: 'Debug: List train directory'
         run: |
           echo "=== train/ contents ==="
           ls -la train/
@@ -73,12 +72,12 @@ jobs:
           flutter-version: '3.7.0'
 
       - name: Install Flutter dependencies
-        run: flutter pub get
         working-directory: flutter_app
+        run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release
         working-directory: flutter_app
+        run: flutter build apk --release
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v3
