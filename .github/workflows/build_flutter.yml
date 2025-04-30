@@ -1,0 +1,34 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'flutter_app/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.7.0'
+
+      - name: Install Flutter dependencies
+        working-directory: flutter_app
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: flutter_app
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: crypto_signal_app.apk
+          path: flutter_app/build/app/outputs/flutter-apk/app-release.apk
