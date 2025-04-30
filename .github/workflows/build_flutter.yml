@@ -1,18 +1,27 @@
-name: Build Flutter APK
+name: CI – Build Flutter APK
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
       - 'flutter_app/**'
-  workflow_dispatch:
 
 jobs:
   build:
+    name: Build & Package
+    needs: train
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download trained model
+        uses: actions/download-artifact@v3
+        with:
+          name: model-files
+          path: train/
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -22,6 +31,11 @@ jobs:
       - name: Install Flutter dependencies
         working-directory: flutter_app
         run: flutter pub get
+
+      - name: Copy TFLite model into assets
+        run: |
+          mkdir -p flutter_app/assets
+          cp train/model.tflite flutter_app/assets/model.tflite
 
       - name: Build release APK
         working-directory: flutter_app
