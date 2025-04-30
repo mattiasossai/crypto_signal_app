@@ -1,3 +1,4 @@
+# .github/workflows/ci_combined.yml
 name: CI – Train, Export TFLite & Build APK
 
 on:
@@ -7,7 +8,7 @@ on:
 
 jobs:
   train:
-    name: 🏋️‍♂️ Train & Export Model
+    name: 🏋️‍♂️ Train & Debug
     runs-on: ubuntu-latest
 
     steps:
@@ -23,28 +24,31 @@ jobs:
         run: pip install -r train/requirements.txt
 
       - name: Run training script
-        run: python train/train.py
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
+        run: python train/train.py
 
       - name: 'Debug: List repo root'
         run: |
-          echo "=== Repo root contents ==="
+          echo "=== Dateien im Repo-Root ==="
           ls -la .
 
       - name: 'Debug: List train directory'
         run: |
-          echo "=== train/ contents ==="
+          echo "=== Dateien im train/ Verzeichnis ==="
           ls -la train/
 
-      - name: Upload model artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: model-files
-          path: |
-            model.keras
-            scaler.pkl
-            model.tflite
+      # ——————————————————————————————————————
+      # Temporär auskommentiert, damit der Debug durchläuft
+      # - name: Upload model artifacts
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: model-files
+      #     path: |
+      #       model.keras
+      #       scaler.pkl
+      #       model.tflite
+      # ——————————————————————————————————————
 
   build:
     name: 📱 Build Flutter APK
