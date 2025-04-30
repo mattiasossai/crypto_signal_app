@@ -1,39 +1,40 @@
-name: CI – Debug Train Outputs
+name: "CI – Debug Train Outputs"
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   debug:
-    name: 🏷️ Train & Debug Paths
+    name: "🏷️ Train & Debug Paths"
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: "Checkout code"
         uses: actions/checkout@v3
 
-      - name: Set up Python 3.10
+      - name: "Set up Python 3.10"
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: Install training dependencies
+      - name: "Install training dependencies"
         run: pip install -r train/requirements.txt
 
-      - name: Run train.py
+      - name: "Run train.py"
         working-directory: train
         run: python train.py
         env:
           PROXY_URL: ${{ secrets.PROXY_URL }}
 
-      - name: 🚩 Debug: Root directory
+      - name: "🚩 Debug: Root directory"
         run: |
           echo "=== Root directory contents ==="
           ls -la .
 
-      - name: 🚩 Debug: train/ directory
+      - name: "🚩 Debug: train/ directory"
         run: |
           echo "=== train/ directory contents ==="
           ls -la train/
