@@ -1,7 +1,6 @@
-python-binance
 pandas
-numpy<1.24
+numpy
+tensorflow>=2.9
 scikit-learn
 pandas-ta
 requests
-tensorflow>=2.9
