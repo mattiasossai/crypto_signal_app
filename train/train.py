@@ -1,165 +1,125 @@
-import os, sys, pickle, zipfile, io
-from datetime import datetime, timedelta
-
-import pandas as pd, numpy as np, tensorflow as tf
-from binance.client import Client, BinanceAPIException
+import os, sys, pickle
+import pandas as pd, numpy as np
+import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import pandas_ta as ta
 import requests
 
-# ─── Konfiguration ──────────────────────────────────────────────────────────────
+# Proxy-URL aus GitHub Secret
+PROXY_URL = os.getenv('PROXY_URL')
 
-PROXY_URL          = os.getenv('PROXY_URL')         # Dein Worker-URL
-BINANCE_API_KEY    = os.getenv('BINANCE_API_KEY')
-BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
-
+# Top-15 USD-M Futures (volumen-basiert)
 SYMBOLS   = ['BTCUSDT','ETHUSDT','BNBUSDT','XRPUSDT','ADAUSDT',
-             'DOGEUSDT','SOLUSDT','AVAXUSDT','DOTUSDT','MATICUSDT',
-             'TRXUSDT','LINKUSDT','FTTUSDT','ETCUSDT','UNIUSDT']
+             'SOLUSDT','DOGEUSDT','AVAXUSDT','DOTUSDT','MATICUSDT',
+             'LINKUSDT','TRXUSDT','ETCUSDT','UNIUSDT','SUIUSDT']
 INTERVALS = ['1m','5m','15m','1h','4h']
+LIMIT     = 500
 
-# für REST-Fallback: 5 Jahre in ms
-PAST_MS   = int((datetime.utcnow() - timedelta(days=5*365)).timestamp() * 1000)
-LIMIT_API = 1500
+def fetch_klines(symbol, interval, mode='rest', date=None):
+    """
+    Modus 'zip' oder 'rest'. Für zip: über PROXY_URL?symbol&interval&mode=zip&date=YYYY-MM-DD
+    Für rest: PROXY_URL?symbol&interval&mode=rest&limit=500
+    """
+    params = {
+      'symbol': symbol,
+      'interval': interval,
+      'mode': mode
+    }
+    if mode == 'zip':
+        params['date'] = date or pd.Timestamp.utcnow().strftime('%Y-%m-%d')
+    else:
+        params['limit'] = str(LIMIT)
 
-client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+    resp = requests.get(PROXY_URL, params=params, timeout=60)
+    resp.raise_for_status()
+    return resp.json()  # bei rest: Liste von Klines
 
-# ─── Hilfsfunktionen ────────────────────────────────────────────────────────────
-
-def load_zip(symbol, interval, date):
-    """Versuch ZIP via Worker → DataFrame."""
-    url = f"{PROXY_URL}?symbol={symbol}&interval={interval}&date={date}"
-    r = requests.get(url, timeout=10)
-    if r.status_code != 200:
-        raise IOError(f"Worker-ZIP fehlgeschlagen ({r.status_code})")
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-        name = z.namelist()[0]
-        df = pd.read_csv(z.open(name), header=None)
-    df.columns = ['t','o','h','l','c','v','ct','qv','nt','tb','tq','x']
-    df['c'], df['v'] = df['c'].astype(float), df['v'].astype(float)
-    df.index = pd.to_datetime(df['t'], unit='ms')
-    return df[['c','v']]
-
-def load_api(symbol, interval):
-    """Hole Kerzen der letzten 5 Jahre per Futures-API."""
-    print(f"🔄 API-Fallback: {symbol} {interval}")
-    parts = []
-    start = PAST_MS
-    while True:
-        kl = client.futures_klines(symbol=symbol, interval=interval, startTime=start, limit=LIMIT_API)
-        if not kl: break
-        df = pd.DataFrame(kl, columns=['t','o','h','l','c','v','ct','qv','nt','tb','tq','x'])
-        df['c'], df['v'] = df['c'].astype(float), df['v'].astype(float)
-        df.index = pd.to_datetime(df['t'], unit='ms')
-        parts.append(df[['c','v']])
-        last = df['t'].iat[-1] + 1
-        if last >= int(datetime.utcnow().timestamp()*1000): break
-        start = last
-    if not parts:
-        raise IOError("API lieferte null Daten")
-    return pd.concat(parts).drop_duplicates()
-
-def build_features(df, pre):
-    """Technische Indikatoren für einen DF."""
-    bb = ta.bbands(df['c'], length=20, std=2)
-    return pd.DataFrame({
-        f"{pre}_c": df['c'],
-        f"{pre}_v": df['v'],
-        f"{pre}_rsi": ta.rsi(df['c'],14),
-        f"{pre}_macd": ta.macd(df['c'],12,26,9)['MACD_12_26_9'],
-        f"{pre}_ema200": ta.ema(df['c'],200),
-        f"{pre}_sma50": ta.sma(df['c'],50),
-        f"{pre}_bb_up": bb['BBU_20_2.0'],
-        f"{pre}_bb_mid": bb['BBM_20_2.0'],
-        f"{pre}_bb_low": bb['BBL_20_2.0']
-    }).dropna()
-
-# ─── 1) Daten sammeln ───────────────────────────────────────────────────────────
-
-all_frames = []
-today = datetime.utcnow().strftime("%Y-%m-%d")
-
+# 1) Daten sammeln & Feature-Berechnung
+frames = []
 for sym in SYMBOLS:
-    sym_frames = []
+    ints = []
     for iv in INTERVALS:
-        # 30 Tage via Worker, sonst API
         try:
-            days = []
-            for d in range(30):
-                date = (datetime.utcnow() - timedelta(days=d)).strftime("%Y-%m-%d")
-                days.append(load_zip(sym, iv, date))
-            hist = pd.concat(days).drop_duplicates().sort_index()
-            print(f"✅ {sym} {iv} via Worker geladen")
+            data = fetch_klines(sym, iv, mode='rest')
+            df = pd.DataFrame(data, columns=[
+              't','o','h','l','c','v','ignore1','ignore2','ignore3','ignore4','ignore5','ignore6'
+            ])
+            df['c'] = df['c'].astype(float)
+            df['v'] = df['v'].astype(float)
+            df.set_index(pd.to_datetime(df['t'], unit='ms'), inplace=True)
         except Exception as e:
-            print(f"⚠️ {sym} {iv} Worker-Fehler: {e}")
-            hist = load_api(sym, iv)
-
-        feat = build_features(hist, iv)
-        if feat.empty:
-            print(f"⚠️ {sym} {iv}: keine Features → übersprungen")
+            print(f"⚠️ {sym} {iv} REST skipped: {e}")
             continue
-        sym_frames.append(feat)
 
-    if not sym_frames:
-        print(f"⚠️ Dummy-Fallback SYMBOL {sym}: keine Intervalle geladen")
+        # Technische Indikatoren (Beispiel)
+        bb = ta.bbands(df['c'], length=20, std=2)
+        feat = pd.DataFrame({
+          f"{iv}_c": df['c'],
+          f"{iv}_v": df['v'],
+          f"{iv}_rsi": ta.rsi(df['c'], length=14),
+          f"{iv}_macd": ta.macd(df['c'], fast=12, slow=26, signal=9)['MACD_12_26_9'],
+          f"{iv}_ema200": ta.ema(df['c'], length=200),
+          f"{iv}_sma50": ta.sma(df['c'], length=50),
+          f"{iv}_bb_up": bb['BBU_20_2.0'],
+          f"{iv}_bb_mid": bb['BBM_20_2.0'],
+          f"{iv}_bb_low": bb['BBL_20_2.0']
+        }).dropna()
+
+        if feat.empty:
+            print(f"⚠️ {sym} {iv}: keine validen Features")
+            continue
+        ints.append(feat)
+
+    if not ints:
+        print(f"⚠️ {sym}: keine Daten in keinem Interval")
         continue
 
-    merged = pd.concat(sym_frames, axis=1, join='inner').dropna()
-    merged['future'] = merged['1h_c'].shift(-1)
+    merged = pd.concat(ints, axis=1, join='inner')
+    merged['future'] = merged[f"1h_c"].shift(-1)
     merged.dropna(inplace=True)
-    merged['label'] = ((merged['future']-merged['1h_c'])/merged['1h_c'])\
-        .apply(lambda x:2 if x>0.01 else (0 if x< -0.01 else 1))
-    all_frames.append(merged)
+    merged['label'] = ((merged['future'] - merged['1h_c']) / merged['1h_c'])\
+                      .apply(lambda x: 2 if x > 0.01 else (0 if x < -0.01 else 1))
+    frames.append(merged)
 
-# ─── 2) Fallback auf Dummy? ───────────────────────────────────────────────────────
-
-if not all_frames:
-    print("❌ Keine Daten für _alle_ Symbole → Dummy-Modell")
-    model = tf.keras.Sequential([tf.keras.layers.Input(1), tf.keras.layers.Dense(3,activation='softmax')])
-    model.compile('adam','categorical_crossentropy')
-    model.save('model.keras')
-    pickle.dump(StandardScaler(), open('scaler.pkl','wb'))
-    tfl = tf.lite.TFLiteConverter.from_keras_model(model).convert()
-    open('model.tflite','wb').write(tfl)
-    sys.exit(0)
-
-data = pd.concat(all_frames).dropna()
+# 2) Validierung
+if not frames:
+    print("⚠️ Keine Trainingsdaten – Abbruch.")
+    sys.exit(1)
+data = pd.concat(frames).dropna()
 if data.empty:
-    print("❌ Daten leer nach Merge → Dummy-Modell")
-    model = tf.keras.Sequential([tf.keras.layers.Input(1), tf.keras.layers.Dense(3,activation='softmax')])
-    model.compile('adam','categorical_crossentropy')
-    model.save('model.keras')
-    pickle.dump(StandardScaler(), open('scaler.pkl','wb'))
-    tfl = tf.lite.TFLiteConverter.from_keras_model(model).convert()
-    open('model.tflite','wb').write(tfl)
-    sys.exit(0)
+    print("⚠️ Nach Merge keine Daten – Abbruch.")
+    sys.exit(1)
 
-# ─── 3) Train/Test ───────────────────────────────────────────────────────────────
+# 3) Features / Labels
+feature_cols = [c for c in data.columns if c not in ['future','label']]
+X = data[feature_cols].values
+y = tf.keras.utils.to_categorical(data['label'], num_classes=3)
 
-X = data[[c for c in data.columns if c not in ['future','label']]].values
-y = tf.keras.utils.to_categorical(data['label'],3)
 scaler = StandardScaler().fit(X)
-X_s = scaler.transform(X)
-Xtr, Xvl, ytr, yvl = train_test_split(X_s,y,test_size=0.2,random_state=42)
+X_scaled = scaler.transform(X)
+Xtr, Xvl, ytr, yvl = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-# ─── 4) Modell ──────────────────────────────────────────────────────────────────
-
+# 4) Modell definieren & trainieren
 model = tf.keras.Sequential([
-    tf.keras.layers.Input(Xtr.shape[1]),
-    tf.keras.layers.Dense(128,'relu'),
+    tf.keras.layers.Input(shape=(Xtr.shape[1],)),
+    tf.keras.layers.Dense(128, activation='relu'),
     tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.Dense(64,'relu'),
-    tf.keras.layers.Dense(3,'softmax'),
+    tf.keras.layers.Dense(64, activation='relu'),
+    tf.keras.layers.Dense(3, activation='softmax')
 ])
-model.compile('adam','categorical_crossentropy',['accuracy'])
-model.fit(Xtr,ytr,validation_data=(Xvl,yvl),epochs=30,batch_size=256)
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+model.fit(Xtr, ytr, validation_data=(Xvl, yvl), epochs=30, batch_size=256)
 
-# ─── 5) Speichern ───────────────────────────────────────────────────────────────
-
+# 5) Speichern
 model.save('model.keras')
-pickle.dump(scaler, open('scaler.pkl','wb'))
-tfl_model = tf.lite.TFLiteConverter.from_keras_model(model).convert()
-open('model.tflite','wb').write(tfl_model)
+with open('scaler.pkl','wb') as f:
+    pickle.dump(scaler, f)
 
-print("🎉 model.keras, scaler.pkl und model.tflite erfolgreich erzeugt")
+# 6) In TFLite konvertieren
+conv = tf.lite.TFLiteConverter.from_keras_model(model)
+tfl = conv.convert()
+with open('model.tflite','wb') as f:
+    f.write(tfl)
+
+print("✅ train.py fertig: model.keras, scaler.pkl, model.tflite")
