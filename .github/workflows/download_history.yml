@@ -1,44 +1,45 @@
-name: 🔄 Download 4yr Historical Data (Split)
+# .github/workflows/download_history_split_60.yml
+name: 📥 Download 4yr Historical Data (60 Jobs)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download_history:
-    name: Download per Symbol × Part × Interval
+  download:
+    name: 🔄 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: false
       matrix:
-        symbol:   [BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,SOLUSDT,ENAUSDT]
-        part:     [part1,part2]
-        interval: [1m,5m,15m,1h,4h]
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        interval: [1m, 5m, 15m, 1h, 4h]
+        part:     [part1, part2]
 
     steps:
-      - name: Checkout repository
+      - name: 📥 Checkout repository
         uses: actions/checkout@v3
 
       - name: 🔧 Make download script executable
-        run: chmod +x train/download_data_range.sh
+        run: chmod +x download_data_range.sh
 
-      - name: ⏱️ Compute date range for ${{ matrix.part }}
+      - name: 📅 Compute date range for ${{ matrix.part }}
         shell: bash
         run: |
-          if [[ "${{ matrix.part }}" == "part1" ]]; then
+          if [ "${{ matrix.part }}" = "part1" ]; then
             START=$(date -I -d "4 years ago")
-            END=$(date -I -d "2 years ago")
+            END  =$(date -I -d "2 years ago")
           else
             START=$(date -I -d "2 years ago")
-            END=$(date -I -d "yesterday")
+            END  =$(date -I -d "yesterday")
           fi
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: 📥 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
-          OUT=historical/${{ matrix.symbol }}/${{ matrix.part }}
+          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
           mkdir -p "$OUT"
-          train/download_data_range.sh \
+          ./download_data_range.sh \
             "${{ matrix.symbol }}" \
             "${{ matrix.interval }}" \
             "$START" "$END" \
@@ -48,11 +49,18 @@ jobs:
         run: |
           mkdir -p artifacts
           ZIP=artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
-          zip -j "$ZIP" historical/${{ matrix.symbol }}/${{ matrix.part }}/*.zip
+          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          # Nur zippen, wenn Dateien existieren
+          if ls "$DIR"/*.zip 1> /dev/null 2>&1; then
+            echo "➤ Zipping $DIR → $ZIP"
+            zip -j "$ZIP" "$DIR"/*.zip
+          else
+            echo "⚠️  No files found in $DIR – skipping zip"
+          fi
 
-      - name: 📤 Upload history artifact
+      - name: 🚀 Upload history artifact
+        if: always() # lädt nur, wenn ZIP existiert
         uses: actions/upload-artifact@v4
         with:
-          # eindeutiger Name pro Job:
-          name: history-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}
+          name: historical-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}
           path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
