@@ -1,4 +1,4 @@
-name: 📥 Download 4yr Historical Data (Split)
+name: 🔄 Download 4yr Historical Data (Split)
 
 on:
   workflow_dispatch:
@@ -18,13 +18,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Make download script executable
+      - name: 🔧 Make download script executable
         run: chmod +x train/download_data_range.sh
 
-      - name: Compute date range for ${{ matrix.part }}
+      - name: ⏱️ Compute date range for ${{ matrix.part }}
         shell: bash
         run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
             START=$(date -I -d "4 years ago")
             END=$(date -I -d "2 years ago")
           else
@@ -34,7 +34,7 @@ jobs:
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
+      - name: 📥 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.part }}
           mkdir -p "$OUT"
@@ -44,14 +44,15 @@ jobs:
             "$START" "$END" \
             "$OUT"
 
-      - name: Zip downloaded files
+      - name: 📦 Zip downloaded files
         run: |
           mkdir -p artifacts
           ZIP=artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
           zip -j "$ZIP" historical/${{ matrix.symbol }}/${{ matrix.part }}/*.zip
 
-      - name: Upload history artifact
+      - name: 📤 Upload history artifact
         uses: actions/upload-artifact@v4
         with:
-          name: history-zips
-          path: artifacts/*.zip
+          # eindeutiger Name pro Job:
+          name: history-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}
+          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
