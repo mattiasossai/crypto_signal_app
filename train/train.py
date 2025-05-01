@@ -27,13 +27,13 @@ SYMBOLS = [
     'TRXUSDT','LINKUSDT','FTTUSDT','ETCUSDT','UNIUSDT'
 ]
 INTERVALS = ['1m','5m','15m','1h','4h']
-# wir laden jeweils 30 Tage Historie – bei Bedarf anpassen
+# Lade die letzten 30 Tage
 DATES = pd.date_range(
     end=pd.Timestamp.utcnow().normalize(),
     periods=30
 ).strftime("%Y-%m-%d")
 
-# === Daten laden ===
+# === Daten laden (tägliche ZIP von data.binance.vision) ===
 def load_historical(symbol: str, interval: str) -> pd.DataFrame:
     dfs = []
     for date in DATES:
@@ -43,26 +43,31 @@ def load_historical(symbol: str, interval: str) -> pd.DataFrame:
             resp.raise_for_status()
             with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
                 fname = z.namelist()[0]
-                df = pd.read_csv(z.open(fname), header=None)
+                # skiprows=1 um den Header "open,close,..." zu überspringen
+                df = pd.read_csv(z.open(fname), header=None, skiprows=1)
             df.columns = ['t','o','h','l','c','v','ct','qv','nt','tb','tq','x']
             df['c'] = df['c'].astype(float)
             df['v'] = df['v'].astype(float)
-            df.set_index(pd.to_datetime(df['t'], unit='ms'), inplace=True)
+            df.index = pd.to_datetime(df['t'], unit='ms')
             dfs.append(df[['c','v']])
         except Exception as e:
             logging.warning(f"{symbol} {interval} {date} skipped: {e}")
-    return pd.concat(dfs).drop_duplicates().last(5000) if dfs else pd.DataFrame()
+    if not dfs:
+        return pd.DataFrame()
+    # zusammenhängen, Duplikate entfernen, maximal 5000 Zeilen behalten
+    all_hist = pd.concat(dfs).drop_duplicates()
+    return all_hist.tail(5000)
 
-# === Merkmale berechnen ===
+# === Feature-Berechnung ===
 def build_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     if df.empty or len(df) < 50:
         return pd.DataFrame()
     bb = ta.bbands(df['c'], length=20, std=2)
     return pd.DataFrame({
-        f"{prefix}_c":   df['c'],
-        f"{prefix}_v":   df['v'],
-        f"{prefix}_rsi": ta.rsi(df['c'], length=14),
-        f"{prefix}_macd": ta.macd(df['c'], fast=12, slow=26, signal=9)['MACD_12_26_9'],
+        f"{prefix}_c":     df['c'],
+        f"{prefix}_v":     df['v'],
+        f"{prefix}_rsi":   ta.rsi(df['c'], length=14),
+        f"{prefix}_macd":  ta.macd(df['c'], fast=12, slow=26, signal=9)['MACD_12_26_9'],
         f"{prefix}_ema200": ta.ema(df['c'], length=200),
         f"{prefix}_sma50":  ta.sma(df['c'], length=50),
         f"{prefix}_bb_up":  bb['BBU_20_2.0'],
@@ -73,23 +78,23 @@ def build_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
 # === Pipeline ===
 frames = []
 for sym in SYMBOLS:
-    feats = []
+    sym_feats = []
     for iv in INTERVALS:
         hist = load_historical(sym, iv)
         feat = build_features(hist, iv)
         if feat.empty:
             logging.warning(f"{sym} {iv}: no valid features")
         else:
-            feats.append(feat)
-    if not feats:
+            sym_feats.append(feat)
+    if not sym_feats:
         logging.warning(f"{sym}: no data at all → skip symbol")
         continue
 
-    df_sym = pd.concat(feats, axis=1, join='inner')
+    df_sym = pd.concat(sym_feats, axis=1, join='inner')
     df_sym['future'] = df_sym['1h_c'].shift(-1)
     df_sym.dropna(inplace=True)
-    df_sym['label']  = ((df_sym['future'] - df_sym['1h_c']) / df_sym['1h_c']) \
-                        .apply(lambda x: 2 if x > 0.01 else (0 if x < -0.01 else 1))
+    df_sym['label'] = ((df_sym['future'] - df_sym['1h_c']) / df_sym['1h_c']) \
+                       .apply(lambda x: 2 if x > 0.01 else (0 if x < -0.01 else 1))
     frames.append(df_sym)
 
 if not frames:
@@ -97,12 +102,12 @@ if not frames:
     sys.exit(1)
 
 data = pd.concat(frames).dropna()
-# Features und Labels
-feat_cols = [c for c in data.columns if any(suffix in c for suffix in ['_c','_v','_rsi','_macd','_ema200','_sma50','_bb_up','_bb_mid','_bb_low'])]
+# Features / Labels trennen
+feat_cols = [c for c in data.columns if any(s in c for s in ['_c','_v','_rsi','_macd','_ema200','_sma50','_bb_'])]
 X = data[feat_cols].values
 y = tf.keras.utils.to_categorical(data['label'], num_classes=3)
 
-# Skalierung
+# Skalieren
 scaler = StandardScaler().fit(X)
 X_scaled = scaler.transform(X)
 Xtr, Xvl, ytr, yvl = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
@@ -132,4 +137,4 @@ tflite_model = converter.convert()
 with open('model.tflite', 'wb') as f:
     f.write(tflite_model)
 
-logging.info("✅ Training abgeschlossen: model.keras, scaler.pkl und model.tflite wurden gespeichert")
+logging.info("✅ Training done: model.keras, scaler.pkl, model.tflite")
