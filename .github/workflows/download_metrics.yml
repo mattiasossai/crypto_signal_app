@@ -1,0 +1,57 @@
+name: 📊 Download 4yr Metrics Data
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download_metrics:
+    name: Download per Symbol × Part × Metric
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        symbol:   [BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,SOLUSDT,ENAUSDT]
+        part:     [part1,part2]
+        metric:   [open_interest,funding_rates,liquidity]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Make metrics script executable
+        run: chmod +x metrics/download_metrics_range.sh
+
+      - name: Compute date range for ${{ matrix.part }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.part }}" = "part1" ]; then
+            START=$(date -I -d "4 years ago")
+            END=$(date -I -d "2 years ago")
+          else
+            START=$(date -I -d "2 years ago")
+            END=$(date -I -d "yesterday")
+          fi
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END"   >> $GITHUB_ENV
+
+      - name: Download ${{ matrix.symbol }} / ${{ matrix.metric }} / ${{ matrix.part }}
+        run: |
+          OUT=metrics/${{ matrix.symbol }}/${{ matrix.metric }}/${{ matrix.part }}
+          mkdir -p "$OUT"
+          metrics/download_metrics_range.sh \
+            "${{ matrix.symbol }}" \
+            "${{ matrix.metric }}" \
+            "$START" "$END" \
+            "$OUT"
+
+      - name: Zip downloaded metrics
+        run: |
+          mkdir -p artifacts
+          ZIP=artifacts/metrics-${{ matrix.symbol }}-${{ matrix.metric }}-${{ matrix.part }}.zip
+          zip -j "$ZIP" metrics/${{ matrix.symbol }}/${{ matrix.metric }}/${{ matrix.part }}/*.json
+
+      - name: Upload metrics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-zips
+          path: artifacts/*.zip
