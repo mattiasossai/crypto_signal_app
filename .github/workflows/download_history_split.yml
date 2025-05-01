@@ -1,0 +1,59 @@
+name: Download 4yr Historical Data (Split)
+
+# Manuelle Auslösung im Actions-Tab
+on:
+  workflow_dispatch:
+
+jobs:
+  part1:
+    name: Download Years  –4 to –2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Make script executable
+        run: chmod +x download_data_range.sh
+
+      - name: Download first 2 years
+        run: |
+          # from 4 years ago (inkl.) bis 2 years ago (inkl.)
+          START=$(date -I -d "4 years ago")
+          END=$(date -I -d "2 years ago")
+          ./download_data_range.sh part1 $START $END
+
+      - name: Zip part1
+        run: zip -r part1_zips.zip historical/part1
+
+      - name: Upload part1 Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: historical-part1
+          path: part1_zips.zip
+
+  part2:
+    name: Download Years –2 to now
+    needs: part1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Make script executable
+        run: chmod +x download_data_range.sh
+
+      - name: Download second 2 years
+        run: |
+          # from 2 years ago (incl.) until yesterday
+          START=$(date -I -d "2 years ago")
+          END=$(date -I -d "yesterday")
+          ./download_data_range.sh part2 $START $END
+
+      - name: Zip part2
+        run: zip -r part2_zips.zip historical/part2
+
+      - name: Upload part2 Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: historical-part2
+          path: part2_zips.zip
