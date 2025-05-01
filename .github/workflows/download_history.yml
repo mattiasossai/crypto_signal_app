@@ -1,61 +1,49 @@
-name: Download 4yr Historical Data (Split)
+# .github/workflows/download_history_split.yml
+name: Download 4yr Historical Data (Per-Symbol Parallel)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download-part1:
-    name: Download Years 4→2 ago
+  download:
+    name: Download ${{ matrix.symbol }} – ${{ matrix.part }}
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        # 6 Symbole × 2 Parts = 12 parallele Jobs
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        part: [part1, part2]
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Script ausführbar machen
-        run: chmod +x train/download_data_range.sh
+    - name: Script ausführbar machen
+      run: chmod +x train/download_data_range.sh
 
-      - name: Download first 2 years (4→2)
-        run: |
+    - name: Download ${{ matrix.part }} für ${{ matrix.symbol }}
+      run: |
+        if [ "${{ matrix.part }}" = "part1" ]; then
           START=$(date -I -d "4 years ago")
-          MID=$(date -I -d "2 years ago")
-          # Beispiel für sechs Symbole, Intervalle je nach Bedarf anpassen:
-          for SYM in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
-            train/download_data_range.sh "$SYM" 1m "$START" "$MID" historical/part1
-          done
-
-      - name: Zip part1 folder
-        run: zip -r part1_zips.zip historical/part1
-
-      - name: Upload artifact part1
-        uses: actions/upload-artifact@v4
-        with:
-          name: historical-part1
-          path: part1_zips.zip
-
-  download-part2:
-    name: Download Years 2→yesterday
-    needs: download-part1
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Script ausführbar machen
-        run: chmod +x train/download_data_range.sh
-
-      - name: Download second 2 years (2→yesterday)
-        run: |
+          END=$(date -I -d "2 years ago")
+        else
           START=$(date -I -d "2 years ago")
           END=$(date -I -d "yesterday")
-          for SYM in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
-            train/download_data_range.sh "$SYM" 1m "$START" "$END" historical/part2
-          done
+        fi
 
-      - name: Zip part2 folder
-        run: zip -r part2_zips.zip historical/part2
+        # Download aller Tage im gewählten Intervall
+        train/download_data_range.sh \
+          "${{ matrix.symbol }}" 1m "$START" "$END" "historical/${{ matrix.part }}"
 
-      - name: Upload artifact part2
-        uses: actions/upload-artifact@v4
-        with:
-          name: historical-part2
-          path: part2_zips.zip
+    - name: ZIP erstellen für ${{ matrix.symbol }} – ${{ matrix.part }}
+      run: |
+        mkdir -p artifacts
+        zip -j artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip \
+            historical/${{ matrix.part }}/${{ matrix.symbol }}-1m-*.zip
+
+    - name: Artifact hochladen
+      uses: actions/upload-artifact@v4
+      with:
+        name: hist-${{ matrix.symbol }}-${{ matrix.part }}
+        path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip
