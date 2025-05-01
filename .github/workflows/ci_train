@@ -1,0 +1,57 @@
+name: 🏋️‍♂️ Train & Prepare
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  train:
+    name: 🏋️‍♂️ Train Model
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install training dependencies
+        run: pip install -r train/requirements.txt
+
+      - name: Download history artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: history-zips
+          path: historical_raw/
+
+      - name: Download metrics artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: metrics-zips
+          path: metrics_raw/
+
+      - name: Unzip all history & metrics
+        run: |
+          mkdir -p historical metrics
+          for Z in historical_raw/*.zip; do unzip -q "$Z" -d historical/; done
+          for Z in metrics_raw/*.zip;    do unzip -q "$Z" -d metrics/;    done
+
+      - name: Run training script
+        env:
+          BINANCE_API_KEY:    ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          PROXY_URL:          ${{ secrets.PROXY_URL }}
+        run: python train/train.py
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-files
+          path: |
+            model.keras
+            scaler.pkl
+            model.tflite
