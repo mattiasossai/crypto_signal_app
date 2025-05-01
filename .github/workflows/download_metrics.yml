@@ -1,57 +1,66 @@
+# .github/workflows/download_metrics.yml
 name: 📊 Download 4yr Metrics Data
 
 on:
   workflow_dispatch:
 
 jobs:
-  download_metrics:
-    name: Download per Symbol × Part × Metric
+  download-metrics-part1:
+    name: 🔹 Download 2021–2023 Metrics
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        symbol:   [BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,SOLUSDT,ENAUSDT]
-        part:     [part1,part2]
-        metric:   [open_interest,funding_rates,liquidity]
-
     steps:
-      - name: Checkout repository
+      - name: 📂 Checkout repository
         uses: actions/checkout@v3
 
-      - name: Make metrics script executable
+      - name: 🌐 Set Worker-URL
+        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
+
+      - name: ▶️ Make metrics script executable
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: Compute date range for ${{ matrix.part }}
-        shell: bash
+      - name: 📥 Download metrics (2021-01-01 → 2023-01-01)
         run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
-            START=$(date -I -d "4 years ago")
-            END=$(date -I -d "2 years ago")
-          else
-            START=$(date -I -d "2 years ago")
-            END=$(date -I -d "yesterday")
-          fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"   >> $GITHUB_ENV
-
-      - name: Download ${{ matrix.symbol }} / ${{ matrix.metric }} / ${{ matrix.part }}
-        run: |
-          OUT=metrics/${{ matrix.symbol }}/${{ matrix.metric }}/${{ matrix.part }}
-          mkdir -p "$OUT"
           metrics/download_metrics_range.sh \
-            "${{ matrix.symbol }}" \
-            "${{ matrix.metric }}" \
-            "$START" "$END" \
-            "$OUT"
+            "2021-01-01" "2023-01-01" metrics/part1
 
-      - name: Zip downloaded metrics
+      - name: 📦 Zip metrics-part1
         run: |
           mkdir -p artifacts
-          ZIP=artifacts/metrics-${{ matrix.symbol }}-${{ matrix.metric }}-${{ matrix.part }}.zip
-          zip -j "$ZIP" metrics/${{ matrix.symbol }}/${{ matrix.metric }}/${{ matrix.part }}/*.json
+          zip -r artifacts/metrics-part1.zip metrics/part1
 
-      - name: Upload metrics artifact
+      - name: 🚀 Upload metrics-part1
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-zips
-          path: artifacts/*.zip
+          name: metrics-part1
+          path: artifacts/metrics-part1.zip
+
+  download-metrics-part2:
+    name: 🔹 Download 2023–2025 Metrics
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📂 Checkout repository
+        uses: actions/checkout@v3
+
+      - name: 🌐 Set Worker-URL
+        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
+
+      - name: ▶️ Make metrics script executable
+        run: chmod +x metrics/download_metrics_range.sh
+
+      - name: 📥 Download metrics (2023-01-01 → 2025-05-01)
+        run: |
+          metrics/download_metrics_range.sh \
+            "2023-01-01" "2025-05-01" metrics/part2
+
+      - name: 📦 Zip metrics-part2
+        run: |
+          mkdir -p artifacts
+          zip -r artifacts/metrics-part2.zip metrics/part2
+
+      - name: 🚀 Upload metrics-part2
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-part2
+          path: artifacts/metrics-part2.zip
