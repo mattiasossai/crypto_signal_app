@@ -1,49 +1,48 @@
-# .github/workflows/download_history_split.yml
-name: Download 4yr Historical Data (Per-Symbol Parallel)
+name: Download 4yr Historical Data (Split)
 
 on:
   workflow_dispatch:
 
 jobs:
   download:
-    name: Download ${{ matrix.symbol }} – ${{ matrix.part }}
+    name: Download 4yr History (per Symbol × Part)
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        # 6 Symbole × 2 Parts = 12 parallele Jobs
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
-        part: [part1, part2]
+        symbol: [BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,SOLUSDT,ENAUSDT]
+        part:   [part1,part2]
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Script ausführbar machen
-      run: chmod +x train/download_data_range.sh
+      - name: Make download script executable
+        run: chmod +x train/download_data_range.sh
 
-    - name: Download ${{ matrix.part }} für ${{ matrix.symbol }}
-      run: |
-        if [ "${{ matrix.part }}" = "part1" ]; then
-          START=$(date -I -d "4 years ago")
-          END=$(date -I -d "2 years ago")
-        else
-          START=$(date -I -d "2 years ago")
-          END=$(date -I -d "yesterday")
-        fi
+      - name: Download ${{ matrix.symbol }} – ${{ matrix.part }}
+        run: |
+          if [ "${{ matrix.part }}" = "part1" ]; then
+            START=$(date -I -d "4 years ago")
+            END  =$(date -I -d "2 years ago")
+          else
+            START=$(date -I -d "2 years ago")
+            END  =$(date -I -d "yesterday")
+          fi
 
-        # Download aller Tage im gewählten Intervall
-        train/download_data_range.sh \
-          "${{ matrix.symbol }}" 1m "$START" "$END" "historical/${{ matrix.part }}"
+          mkdir -p historical/${{ matrix.symbol }}/${{ matrix.part }}
+          train/download_data_range.sh \
+            "${{ matrix.symbol }}" 1m "$START" "$END" \
+            "historical/${{ matrix.symbol }}/${{ matrix.part }}"
 
-    - name: ZIP erstellen für ${{ matrix.symbol }} – ${{ matrix.part }}
-      run: |
-        mkdir -p artifacts
-        zip -j artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip \
-            historical/${{ matrix.part }}/${{ matrix.symbol }}-1m-*.zip
+      - name: Zip & upload artifact
+        run: |
+          zip -j \
+            artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip \
+            historical/${{ matrix.symbol }}/${{ matrix.part }}/*.zip
 
-    - name: Artifact hochladen
-      uses: actions/upload-artifact@v4
-      with:
-        name: hist-${{ matrix.symbol }}-${{ matrix.part }}
-        path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip
+      - name: Upload history artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hist-${{ matrix.symbol }}-${{ matrix.part }}
+          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip
