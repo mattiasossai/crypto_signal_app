@@ -1,6 +1,5 @@
 name: Download Historical Data (Split)
 
-# manuell im Actions-Tab starten
 on:
   workflow_dispatch:
 
@@ -9,23 +8,19 @@ jobs:
     name: Download Years 4→2 ago
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Make download script executable
-        run: chmod +x download_data_range.sh
+      - run: chmod +x download_data_range.sh
 
-      - name: Download first 2 years (4→2)
-        run: |
+      - run: |
           START=$(date -I -d "4 years ago")
           END=$(date -I -d "2 years ago")
           ./download_data_range.sh part1 "$START" "$END"
 
-      - name: Zip part1 folder
-        run: zip -r part1_zips.zip historical/part1
+      - run: zip -r part1_zips.zip historical/part1
 
       - name: Upload artifact part1
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: historical-part1
           path: part1_zips.zip
@@ -35,23 +30,19 @@ jobs:
     needs: download-part1
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Make download script executable
-        run: chmod +x download_data_range.sh
+      - run: chmod +x download_data_range.sh
 
-      - name: Download second 2 years (2→yesterday)
-        run: |
+      - run: |
           START=$(date -I -d "2 years ago")
           END=$(date -I -d "yesterday")
           ./download_data_range.sh part2 "$START" "$END"
 
-      - name: Zip part2 folder
-        run: zip -r part2_zips.zip historical/part2
+      - run: zip -r part2_zips.zip historical/part2
 
       - name: Upload artifact part2
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: historical-part2
           path: part2_zips.zip
