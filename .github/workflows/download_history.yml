@@ -1,3 +1,4 @@
+# .github/workflows/download_history.yml
 name: Download 4yr Historical Data (Split)
 
 on:
@@ -21,22 +22,30 @@ jobs:
         run: chmod +x train/download_data_range.sh
 
       - name: Download ${{ matrix.symbol }} – ${{ matrix.part }}
+        shell: bash
         run: |
+          # setze Zeitspanne je Part
           if [ "${{ matrix.part }}" = "part1" ]; then
             START=$(date -I -d "4 years ago")
-            END  =$(date -I -d "2 years ago")
+            END=$(date -I -d "2 years ago")
           else
             START=$(date -I -d "2 years ago")
-            END  =$(date -I -d "yesterday")
+            END=$(date -I -d "yesterday")
           fi
 
-          mkdir -p historical/${{ matrix.symbol }}/${{ matrix.part }}
+          # Erstelle Zielverzeichnis
+          TARGET=historical/${{ matrix.symbol }}/${{ matrix.part }}
+          mkdir -p "$TARGET"
+
+          # Download aller Daily-ZIPs
           train/download_data_range.sh \
             "${{ matrix.symbol }}" 1m "$START" "$END" \
-            "historical/${{ matrix.symbol }}/${{ matrix.part }}"
+            "$TARGET"
 
       - name: Zip & upload artifact
+        shell: bash
         run: |
+          mkdir -p artifacts
           zip -j \
             artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip \
             historical/${{ matrix.symbol }}/${{ matrix.part }}/*.zip
