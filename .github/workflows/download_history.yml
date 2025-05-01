@@ -1,5 +1,5 @@
 # .github/workflows/download_history.yml
-name: Download 4yr History (Split)
+name: Download 4yr History (Split × Interval)
 
 on:
   workflow_dispatch:
@@ -9,8 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,SOLUSDT,ENAUSDT]
-        part:   [part1,part2]
+        symbol:    [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        part:      [part1, part2]
+        interval:  [1m, 5m, 15m, 1h, 4h]
 
     steps:
       - name: Checkout repository
@@ -24,35 +25,35 @@ jobs:
         run: |
           if [ "${{ matrix.part }}" = "part1" ]; then
             START=$(date -I -d "4 years ago")
-            END=$(date -I -d "2 years ago")
+            END  =$(date -I -d "2 years ago")
           else
             START=$(date -I -d "2 years ago")
-            END=$(date -I -d "yesterday")
+            END  =$(date -I -d "yesterday")
           fi
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download ${{ matrix.symbol }} ${{ matrix.part }}
+      - name: Download ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }}
         shell: bash
         run: |
-          mkdir -p historical/${{ matrix.symbol }}/${{ matrix.part }}
+          OUTDIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          mkdir -p "$OUTDIR"
           ./train/download_data_range.sh \
-            "${{ matrix.symbol }}" 1m "$START" "$END" \
-            "historical/${{ matrix.symbol }}/${{ matrix.part }}"
+            "${{ matrix.symbol }}" "${{ matrix.interval }}" "$START" "$END" "$OUTDIR"
 
-      - name: Zip historical/${{ matrix.symbol }}/${{ matrix.part }}
+      - name: Zip ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }}
         shell: bash
         run: |
           mkdir -p artifacts
-          DIR=historical/${{ matrix.symbol }}/${{ matrix.part }}
-          # nur zippen, wenn dort wirklich .zip-Dateien liegen
+          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          ZIP=artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
           if compgen -G "$DIR/*.zip" > /dev/null; then
-            zip -j artifacts/hist-${{ matrix.symbol }}-${{ matrix.part }}.zip "$DIR"/*.zip
+            zip -j "$ZIP" "$DIR"/*.zip
           else
-            echo "⚠️ No files in $DIR → skipping zip."
+            echo "⚠️  No files in $DIR → skipping zip."
           fi
 
-      - name: Upload all artifacts
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
