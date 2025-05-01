@@ -1,42 +1,61 @@
-name: Download Historische Daten
+name: Download 4yr Historical Data (Split)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
+  download-part1:
+    name: Download Years 4→2 ago
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Make download script executable
+      - name: Script ausführbar machen
         run: chmod +x train/download_data_range.sh
 
-      - name: Download 2 Jahre Historie
+      - name: Download first 2 years (4→2)
         run: |
           START=$(date -I -d "4 years ago")
           MID=$(date -I -d "2 years ago")
-          train/download_data_range.sh BTCUSDT 1m "$START" "$MID" historical/part1
-          train/download_data_range.sh ETHUSDT 1m "$START" "$MID" historical/part1
-          # … analog für die anderen 4 Symbole
+          # Beispiel für sechs Symbole, Intervalle je nach Bedarf anpassen:
+          for SYM in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
+            train/download_data_range.sh "$SYM" 1m "$START" "$MID" historical/part1
+          done
 
-      - name: Download letzte 2 Jahre
-        run: |
-          MID=$(date -I -d "2 years ago")
-          END=$(date -I -d "yesterday")
-          train/download_data_range.sh BTCUSDT 1m "$MID" "$END" historical/part2
-          train/download_data_range.sh ETHUSDT 1m "$MID" "$END" historical/part2
-          # … analog für die anderen 4 Symbole
+      - name: Zip part1 folder
+        run: zip -r part1_zips.zip historical/part1
 
-      - name: Upload ZIP-Artefakte Part 1
+      - name: Upload artifact part1
         uses: actions/upload-artifact@v4
         with:
           name: historical-part1
-          path: historical/part1
+          path: part1_zips.zip
 
-      - name: Upload ZIP-Artefakte Part 2
+  download-part2:
+    name: Download Years 2→yesterday
+    needs: download-part1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Script ausführbar machen
+        run: chmod +x train/download_data_range.sh
+
+      - name: Download second 2 years (2→yesterday)
+        run: |
+          START=$(date -I -d "2 years ago")
+          END=$(date -I -d "yesterday")
+          for SYM in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
+            train/download_data_range.sh "$SYM" 1m "$START" "$END" historical/part2
+          done
+
+      - name: Zip part2 folder
+        run: zip -r part2_zips.zip historical/part2
+
+      - name: Upload artifact part2
         uses: actions/upload-artifact@v4
         with:
           name: historical-part2
-          path: historical/part2
+          path: part2_zips.zip
