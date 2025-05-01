@@ -1,12 +1,12 @@
-# .github/workflows/ci_debug.yml
 name: CI – Train & Debug
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
     paths:
       - 'train/**'
-  workflow_dispatch:
 
 jobs:
   train:
@@ -15,27 +15,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup Python
+      - name: Setup Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install training dependencies
-        run: pip install -r train/requirements.txt
+        run: |
+          pip install -r train/requirements.txt
 
       - name: Run training script
         env:
-          PROXY_URL: ${{ secrets.PROXY_URL }}
-        run: python train/train.py
-
-      - name: Convert to TFLite
-        run: python train/convert_to_tflite.py
-
-      - name: Debug: list workspace
+          BINANCE_API_KEY:    ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          PROXY_URL:          ${{ secrets.PROXY_URL }}
         run: |
-          echo "=== Project root ==="
-          ls -R .
-          echo ""
-          echo "=== train/ directory ==="
-          ls -la train/
+          python train/train.py
 
+      - name: Debug: list train folder
+        run: |
+          echo "=== train directory contents ==="
+          ls -la train/
