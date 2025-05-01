@@ -1,0 +1,42 @@
+name: Download Historische Daten
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Make download script executable
+        run: chmod +x train/download_data_range.sh
+
+      - name: Download 2 Jahre Historie
+        run: |
+          START=$(date -I -d "4 years ago")
+          MID=$(date -I -d "2 years ago")
+          train/download_data_range.sh BTCUSDT 1m "$START" "$MID" historical/part1
+          train/download_data_range.sh ETHUSDT 1m "$START" "$MID" historical/part1
+          # … analog für die anderen 4 Symbole
+
+      - name: Download letzte 2 Jahre
+        run: |
+          MID=$(date -I -d "2 years ago")
+          END=$(date -I -d "yesterday")
+          train/download_data_range.sh BTCUSDT 1m "$MID" "$END" historical/part2
+          train/download_data_range.sh ETHUSDT 1m "$MID" "$END" historical/part2
+          # … analog für die anderen 4 Symbole
+
+      - name: Upload ZIP-Artefakte Part 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-part1
+          path: historical/part1
+
+      - name: Upload ZIP-Artefakte Part 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-part2
+          path: historical/part2
