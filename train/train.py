@@ -27,11 +27,9 @@ SYMBOLS = [
     'TRXUSDT','LINKUSDT','FTTUSDT','ETCUSDT','UNIUSDT'
 ]
 INTERVALS = ['1m','5m','15m','1h','4h']
-# Lade die letzten 30 Tage
-DATES = pd.date_range(
-    end=pd.Timestamp.utcnow().normalize(),
-    periods=30
-).strftime("%Y-%m-%d")
+# Lade 30 Tage Historie (bis gestern, um 404 für heutiges Zip zu vermeiden)
+yesterday = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)
+DATES = pd.date_range(end=yesterday, periods=30).strftime('%Y-%m-%d')
 
 # === Daten laden (tägliche ZIP von data.binance.vision) ===
 def load_historical(symbol: str, interval: str) -> pd.DataFrame:
