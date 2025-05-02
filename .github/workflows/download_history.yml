@@ -1,43 +1,34 @@
-# .github/workflows/download_history_split_60.yml
-name: 📥 Download 4yr Historical Data (60 Jobs)
+name: 📥 Download 8yr Historical Data (Split)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
-    name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
+  download-old:
+    name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜2017→2021
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
         interval: [1m, 5m, 15m, 1h, 4h]
-        part:     [part1, part2]
 
     steps:
       - name: 🔄 Checkout repository
         uses: actions/checkout@v3
 
-      - name: ⚙️  Skript ausführbar machen
+      - name: ⚙️ Mach Download-Script ausführbar
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Berechne Datumsspanne für ${{ matrix.part }}
+      - name: 📅 Setze Zeitspanne 2017→2021
         shell: bash
         run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
-            START=$(date -I -d "4 years ago")
-            END=$(date -I -d "2 years ago")
-          else
-            START=$(date -I -d "2 years ago")
-            END=$(date -I -d "yesterday")
-          fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
+          echo "START=2017-01-01" >> $GITHUB_ENV
+          echo "END=2021-01-01"   >> $GITHUB_ENV
 
-      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }}
         run: |
-          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/2017-2021
           mkdir -p "$OUT"
           train/download_data_range.sh \
             "${{ matrix.symbol }}" \
@@ -45,16 +36,78 @@ jobs:
             "$START" "$END" \
             "$OUT"
 
-      - name: 📦 Zip alle .zip-Dateien
+      - name: 📦 Zip & Skip empty
+        shell: bash
         run: |
           mkdir -p artifacts
-          ZIP=artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
-          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
-          echo "→ Zipping $DIR/*.zip → $ZIP"
-          zip -j "$ZIP" "$DIR"/*.zip
+          ZIP="artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-2017-2021.zip"
+          DIR="historical/${{ matrix.symbol }}/${{ matrix.interval }}/2017-2021"
+          shopt -s nullglob
+          files=( "$DIR"/*.zip )
+          if [ ${#files[@]} -gt 0 ]; then
+            zip -j "$ZIP" "${files[@]}"
+            echo "→ Created $ZIP with ${#files[@]} files"
+          else
+            echo "→ No files for $DIR — skipping zip"
+          fi
 
-      - name: 🚀 Upload Artifact
+      - name: 🚀 Upload Artifact 2017→2021
         uses: actions/upload-artifact@v4
         with:
-          name: historical-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}
-          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
+          name: historical-${{ matrix.symbol }}-${{ matrix.interval }}-2017-2021
+          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-2017-2021.zip
+
+  download-new:
+    name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜2021→heute
+    needs: download-old
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        interval: [1m, 5m, 15m, 1h, 4h]
+
+    steps:
+      - name: 🔄 Checkout repository
+        uses: actions/checkout@v3
+
+      - name: ⚙️ Mach Download-Script ausführbar
+        run: chmod +x train/download_data_range.sh
+
+      - name: 📅 Setze Zeitspanne 2021→heute
+        shell: bash
+        run: |
+          echo "START=2021-01-01" >> $GITHUB_ENV
+          echo "END=$(date -I -d "yesterday")" >> $GITHUB_ENV
+
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }}
+        run: |
+          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/2021-heute
+          mkdir -p "$OUT"
+          train/download_data_range.sh \
+            "${{ matrix.symbol }}" \
+            "${{ matrix.interval }}" \
+            "$START" "$END" \
+            "$OUT"
+
+      - name: 📦 Zip & Skip empty
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          ZIP="artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-2021-heute.zip"
+          DIR="historical/${{ matrix.symbol }}/${{ matrix.interval }}/2021-heute"
+          shopt -s nullglob
+          files=( "$DIR"/*.zip )
+          if [ ${#files[@]} -gt 0 ]; then
+            zip -j "$ZIP" "${files[@]}"
+            echo "→ Created $ZIP with ${#files[@]} files"
+          else
+            echo "→ No files for $DIR — skipping zip"
+          fi
+
+      - name: 🚀 Upload Artifact 2021→heute
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-${{ matrix.symbol }}-${{ matrix.interval }}-2021-heute
+          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-2021-heute.zip
+
