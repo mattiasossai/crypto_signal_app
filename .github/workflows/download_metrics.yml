@@ -1,66 +1,85 @@
-# .github/workflows/download_metrics.yml
-name: 📊 Download 4yr Metrics Data
+name: 📊 Download Metrics (ab 2020)
 
 on:
   workflow_dispatch:
 
+env:
+  # hinterleg in Deinen Repo-Secrets → CF_PROXY_URL
+  WORKER_URL: ${{ secrets.CF_PROXY_URL }}
+
 jobs:
-  download-metrics-part1:
-    name: 🔹 Download 2021–2023 Metrics
+  download-2020-2022:
+    name: 🔹 2020→2022 Metrics
     runs-on: ubuntu-latest
-
     steps:
-      - name: 📂 Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: 🌐 Set Worker-URL
-        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
-
-      - name: ▶️ Make metrics script executable
+      - name: ⚙️ Script ausführbar machen
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: 📥 Download metrics (2021-01-01 → 2023-01-01)
+      - name: 📅 Datum setzen 2020–2022
         run: |
-          metrics/download_metrics_range.sh \
-            "2021-01-01" "2023-01-01" metrics/part1
+          echo "START=2020-01-01" >> $GITHUB_ENV
+          echo "END=2022-01-01"   >> $GITHUB_ENV
+          echo "PART=part1"       >> $GITHUB_ENV
 
-      - name: 📦 Zip metrics-part1
+      - name: 🌐 Download Metrics 2020–2022
+        run: ./metrics/download_metrics_range.sh "$START" "$END" "$PART"
+
+      - name: 📦 Zip & keine leeren Ordner
         run: |
           mkdir -p artifacts
-          zip -r artifacts/metrics-part1.zip metrics/part1
+          shopt -s globstar nullglob
+          DIR=metrics/${PART}
+          files=( "$DIR"/**/*.json )
+          if (( ${#files[@]} )); then
+            zip -j artifacts/metrics-${PART}-2020-2022.zip "${files[@]}"
+            echo "→ metrics-${PART}-2020-2022.zip (${#files[@]} files)"
+          else
+            echo "⏩ Keine Metrics für $DIR"
+          fi
 
-      - name: 🚀 Upload metrics-part1
+      - name: 🚀 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-part1
-          path: artifacts/metrics-part1.zip
+          name: metrics-2020-2022
+          path: artifacts/metrics-part1-2020-2022.zip
 
-  download-metrics-part2:
-    name: 🔹 Download 2023–2025 Metrics
+  download-2022-now:
+    name: 🔹 2022→gestern Metrics
+    needs: download-2020-2022
     runs-on: ubuntu-latest
-
     steps:
-      - name: 📂 Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: 🌐 Set Worker-URL
-        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
-
-      - name: ▶️ Make metrics script executable
+      - name: ⚙️ Script ausführbar machen
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: 📥 Download metrics (2023-01-01 → 2025-05-01)
+      - name: 📅 Datum setzen 2022–gestern
         run: |
-          metrics/download_metrics_range.sh \
-            "2023-01-01" "2025-05-01" metrics/part2
+          echo "START=2022-01-01" >> $GITHUB_ENV
+          echo "END=$(date -I -d 'yesterday')" >> $GITHUB_ENV
+          echo "PART=part2"                      >> $GITHUB_ENV
 
-      - name: 📦 Zip metrics-part2
+      - name: 🌐 Download Metrics 2022–gestern
+        run: ./metrics/download_metrics_range.sh "$START" "$END" "$PART"
+
+      - name: 📦 Zip & keine leeren Ordner
         run: |
           mkdir -p artifacts
-          zip -r artifacts/metrics-part2.zip metrics/part2
+          shopt -s globstar nullglob
+          DIR=metrics/${PART}
+          files=( "$DIR"/**/*.json )
+          if (( ${#files[@]} )); then
+            zip -j artifacts/metrics-${PART}-2022-gestern.zip "${files[@]}"
+            echo "→ metrics-${PART}-2022-gestern.zip (${#files[@]} files)"
+          else
+            echo "⏩ Keine Metrics für $DIR"
+          fi
 
-      - name: 🚀 Upload metrics-part2
+      - name: 🚀 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-part2
-          path: artifacts/metrics-part2.zip
+          name: metrics-2022-gestern
+          path: artifacts/metrics-part2-2022-gestern.zip
+
