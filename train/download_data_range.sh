@@ -21,7 +21,7 @@ while [[ "$current" != "$stop" ]]; do
     http_code=$(curl -sSL -w "%{http_code}" -o "$file" "$url" || true)
     if [[ "$http_code" -ne 200 ]]; then
       rm -f "$file"
-      echo "⚠️ $SYMBOL $INTERVAL $current → HTTP $http_code, übersprungen"
+      echo "⚠️ $SYMBOL $INTERVAL $current → HTTP $http_code, skipping"
     else
       echo "✅ saved $file"
     fi
