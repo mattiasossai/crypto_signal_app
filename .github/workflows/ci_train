@@ -1,9 +1,11 @@
 name: 🏋️‍♂️ Train & Prepare
-
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'historical/**'
+      - 'metrics/**'
+  workflow_dispatch:
 
 jobs:
   train:
