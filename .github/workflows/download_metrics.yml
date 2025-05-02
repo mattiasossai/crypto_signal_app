@@ -10,8 +10,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        metric: [open_interest, funding_rate, liquidity]
-        part:   [part1, part2]
+        metric: 
+          - open_interest
+          - funding_rate
+          - liquidity
+        part:
+          - part1
+          - part2
 
     steps:
       - name: Checkout repository
@@ -24,7 +29,6 @@ jobs:
         run: chmod +x metrics/download_metrics_range.sh
 
       - name: Compute date range for ${{ matrix.part }}
-        shell: bash
         run: |
           if [ "${{ matrix.part }}" = "part1" ]; then
             START="2020-01-01"
@@ -36,12 +40,11 @@ jobs:
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download metrics: ${{ matrix.metric }}
+      - name: Download all metrics for ${{ matrix.part }}
         run: |
-          # Script lädt zwar alle 3 Metriken, wir zippen aber nur die eine, die wir hier brauchen
-          ./metrics/download_metrics_range.sh "$START" "$END" ${{ matrix.part }}
+          ./metrics/download_metrics_range.sh "$START" "$END" "${{ matrix.part }}"
 
-      - name: Zip only "${{ matrix.metric }}"
+      - name: Zip only ${{ matrix.metric }}
         run: |
           mkdir -p artifacts
           ZIP=artifacts/metrics-${{ matrix.metric }}-${{ matrix.part }}.zip
