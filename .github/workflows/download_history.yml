@@ -1,6 +1,5 @@
 name: 📥 Download & Commit Candlestick History CSVs
 
-# Trigger nur manuell und auf Pushes, die NICHT historical/** betreffen
 on:
   workflow_dispatch:
   push:
@@ -9,17 +8,10 @@ on:
     paths-ignore:
       - 'historical/**'
 
-# Verhindert Race-Conditions in Parallel-Runs (optional)
-concurrency:
-  group: download-history
-  cancel-in-progress: false
-
 jobs:
   download:
-    # Job-Name spiegelt Symbol｜Interval｜Part wider
     name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
@@ -28,18 +20,16 @@ jobs:
         part:     [part1, part2]
 
     steps:
-      # 1) Checkout mit Schreibrechten
-      - name: 🔄 Checkout repository
+      - name: 🔄 Checkout repository (full history)
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
+          fetch-depth: 0             # ← Hier holen wir alles
 
-      # 2) Download-Script ausführbar machen
       - name: ⚙️  Skript ausführbar machen
         run: chmod +x train/download_data_range.sh
 
-      # 3) Datumsspanne für part1/part2 berechnen
       - name: 📅 Berechne Datumsspanne
         id: dates
         run: |
@@ -53,7 +43,6 @@ jobs:
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=  $END"   >> $GITHUB_OUTPUT
 
-      # 4) Tages-ZIPs herunterladen
       - name: 🌐 Download ZIPs
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -65,7 +54,6 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      # 5) Entpacken und ZIPs löschen
       - name: 📂 Entpacke & Cleanup
         run: |
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -74,15 +62,23 @@ jobs:
             rm -f   "$z"
           done
 
-      # 6) CSV-Dateien committen und pushen
       - name: 📝 Commit & Push CSVs
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Alle neuen CSVs zum Commit vormerken
+
+          # Alle neuen CSVs vormerken
           git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}/*.csv
-          # Wenn nichts zu committen ist, abbrechen
-          git diff --quiet || {
+
+          # Wenn es etwas zum Committen gibt:
+          if ! git diff --cached --quiet; then
             git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }} CSVs up to $(date -I) [skip ci]"
+
+            # Rebase auf aktuelle Main
+            git pull --rebase origin main
+
+            # Dann pushe
             git push origin HEAD:main
-          }
+          else
+            echo "Keine neuen CSVs zum Committen."
+          fi
