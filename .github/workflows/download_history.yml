@@ -1,11 +1,22 @@
-# .github/workflows/history_download.yml
-name: 📥 Download Candlestick History
+name: 📥 Download & Commit Candlestick History CSVs
 
+# Trigger nur manuell und auf Pushes, die NICHT historical/** betreffen
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'historical/**'
+
+# Verhindert Race-Conditions in Parallel-Runs (optional)
+concurrency:
+  group: download-history
+  cancel-in-progress: false
 
 jobs:
-  download-history:
+  download:
+    # Job-Name spiegelt Symbol｜Interval｜Part wider
     name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
 
@@ -17,28 +28,33 @@ jobs:
         part:     [part1, part2]
 
     steps:
-      # 1) Repository auschecken
+      # 1) Checkout mit Schreibrechten
       - name: 🔄 Checkout repository
         uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       # 2) Download-Script ausführbar machen
-      - name: ⚙️ Skript ausführbar machen
+      - name: ⚙️  Skript ausführbar machen
         run: chmod +x train/download_data_range.sh
 
-      # 3) Datumsspanne berechnen
-      - name: 📅 Datumsspanne berechnen
+      # 3) Datumsspanne für part1/part2 berechnen
+      - name: 📅 Berechne Datumsspanne
         id: dates
         run: |
           if [[ "${{ matrix.part }}" == "part1" ]]; then
-            echo "start=2020-01-01" >> $GITHUB_OUTPUT
-            echo "end=2022-01-01"   >> $GITHUB_OUTPUT
+            START=2020-01-01
+            END=2022-01-01
           else
-            echo "start=2022-01-01" >> $GITHUB_OUTPUT
-            echo "end=$(date -I -d "yesterday")" >> $GITHUB_OUTPUT
+            START=2022-01-01
+            END=$(date -I -d "yesterday")
           fi
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=  $END"   >> $GITHUB_OUTPUT
 
-      # 4) Zips herunterladen
-      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
+      # 4) Tages-ZIPs herunterladen
+      - name: 🌐 Download ZIPs
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
           mkdir -p "$OUT"
@@ -49,17 +65,24 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      # 5) Alle .zip-Dateien entpacken
-      - name: 📥 Unzip in ${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+      # 5) Entpacken und ZIPs löschen
+      - name: 📂 Entpacke & Cleanup
         run: |
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
           for z in "$DIR"/*.zip; do
             unzip -q "$z" -d "$DIR"
+            rm -f   "$z"
           done
 
-      # 6) Aufräumen: ZIP-Dateien löschen
-      - name: 🧹 Alte ZIP-Dateien entfernen
+      # 6) CSV-Dateien committen und pushen
+      - name: 📝 Commit & Push CSVs
         run: |
-          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
-          rm -f "$DIR"/*.zip
-
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Alle neuen CSVs zum Commit vormerken
+          git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}/*.csv
+          # Wenn nichts zu committen ist, abbrechen
+          git diff --quiet || {
+            git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }} CSVs up to $(date -I) [skip ci]"
+            git push origin HEAD:main
+          }
