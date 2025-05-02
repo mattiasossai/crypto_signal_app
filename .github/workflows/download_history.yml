@@ -1,4 +1,4 @@
-name: 📥 Download & Commit Candlestick History CSVs
+name: 📥 Download Candlestick History into Repo
 
 on:
   workflow_dispatch:
@@ -10,8 +10,10 @@ on:
 
 jobs:
   download:
-    name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
+    # Parallel für jedes Symbol｜Interval｜Part
+    name: 🔄 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
@@ -20,17 +22,22 @@ jobs:
         part:     [part1, part2]
 
     steps:
-      - name: 🔄 Checkout repository (full history)
+      # 1) checkout
+      - name: 🔀 Checkout repository
         uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
-          fetch-depth: 0             # ← Hier holen wir alles
 
-      - name: ⚙️  Skript ausführbar machen
+      # 2) Git user konfigurieren
+      - name: ⚙️ Configure Git user
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # 3) Download-Script ausführbar machen
+      - name: 🔧 Make download script executable
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Berechne Datumsspanne
+      # 4) Datumsspanne berechnen
+      - name: 📅 Calculate date range for ${{ matrix.part }}
         id: dates
         run: |
           if [[ "${{ matrix.part }}" == "part1" ]]; then
@@ -41,9 +48,10 @@ jobs:
             END=$(date -I -d "yesterday")
           fi
           echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=  $END"   >> $GITHUB_OUTPUT
+          echo "end=$END"   >> $GITHUB_OUTPUT
 
-      - name: 🌐 Download ZIPs
+      # 5) Download der historischen Daten
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
           mkdir -p "$OUT"
@@ -54,31 +62,28 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      - name: 📂 Entpacke & Cleanup
+      # 6) ZIP entpacken + aufräumen
+      - name: 📂 Unzip & cleanup
         run: |
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
           for z in "$DIR"/*.zip; do
             unzip -q "$z" -d "$DIR"
-            rm -f   "$z"
           done
+          rm -f "$DIR"/*.zip
 
-      - name: 📝 Commit & Push CSVs
+      # 7) Commit & Push der neuen CSVs
+      - name: 🔄 Commit & Push CSVs into repo
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Hol erst die aktuellste main
+          git pull --rebase origin main
 
-          # Alle neuen CSVs vormerken
-          git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}/*.csv
+          # Stage alle CSVs in diesem Verzeichnis
+          git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
 
-          # Wenn es etwas zum Committen gibt:
+          # Nur committen, wenn es Änderungen gibt
           if ! git diff --cached --quiet; then
             git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }} CSVs up to $(date -I) [skip ci]"
-
-            # Rebase auf aktuelle Main
-            git pull --rebase origin main
-
-            # Dann pushe
             git push origin HEAD:main
           else
-            echo "Keine neuen CSVs zum Committen."
+            echo "→ No new CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}"
           fi
