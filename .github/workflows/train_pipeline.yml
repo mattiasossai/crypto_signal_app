@@ -1,0 +1,83 @@
+name: 🏋️‍♂️ Full Pipeline: Download & Train
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────────
+  # 1) Artifacts herunterladen
+  download_artifacts:
+    name: 📥 Download Candles + Metrics Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🔄 Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 📦 Download Candlestick Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: history-*
+          path: historical_raw/
+
+      - name: 📊 Download Metrics Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: metrics-*
+          path: metrics_raw/
+
+      - name: ✅ Mark artifacts ready
+        run: echo "ARTIFACTS_DOWNLOADED=true" >> $GITHUB_ENV
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # 2) Artifacts entpacken
+  prepare_data:
+    name: 🗂️ Unzip Historical & Metrics
+    runs-on: ubuntu-latest
+    needs: download_artifacts
+    steps:
+      - name: 🔄 Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🔧 Unzip Candlestick-Zips
+        run: |
+          mkdir -p historical
+          for Z in historical_raw/*.zip; do
+            unzip -q "$Z" -d historical/
+          done
+
+      - name: 🔧 Unzip Metrics-Zips
+        run: |
+          mkdir -p metrics
+          for Z in metrics_raw/*.zip; do
+            unzip -q "$Z" -d metrics/
+          done
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # 3) Trainieren und TFLite erzeugen
+  train_model:
+    name: 🤖 Train & Export TFLite
+    runs-on: ubuntu-latest
+    needs: prepare_data
+    steps:
+      - name: 🔄 Checkout repo
+        uses: actions/checkout@v3
+
+      - name: ⚙️ Setup Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: 📥 Install training dependencies
+        run: pip install -r train/requirements.txt
+
+      - name: ▶️ Run training script
+        working-directory: train
+        run: python train.py
+
+      - name: 🚀 Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-files
+          path: |
+            train/scaler.pkl
+            train/model.tflite
