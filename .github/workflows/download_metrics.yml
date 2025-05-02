@@ -1,85 +1,71 @@
-name: 📊 Download Metrics (ab 2020)
+name: 📊 Download Metrics (Parallel)
 
 on:
   workflow_dispatch:
 
-env:
-  # hinterleg in Deinen Repo-Secrets → CF_PROXY_URL
-  WORKER_URL: ${{ secrets.CF_PROXY_URL }}
-
 jobs:
-  download-2020-2022:
-    name: 🔹 2020→2022 Metrics
+  download_metrics:
+    name: 📊 ${{ matrix.symbol }}｜${{ matrix.metric }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+    strategy:
+      fail-fast: false
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        metric: [open_interest, funding_rate, liquidity]
+        part: [part1, part2]
 
-      - name: ⚙️ Script ausführbar machen
+    steps:
+      - name: 🔄 Checkout repository
+        uses: actions/checkout@v3
+
+      - name: 🔑 WORKER_URL setzen
+        # Deploye vorher Deinen Cloudflare-Worker und
+        # speichere die URL als GitHub-Secret METRICS_WORKER_URL
+        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
+
+      - name: ⚙️  Skript ausführbar machen
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: 📅 Datum setzen 2020–2022
+      - name: 📅 Datumsspanne berechnen (${{ matrix.part }})
+        id: dates
         run: |
-          echo "START=2020-01-01" >> $GITHUB_ENV
-          echo "END=2022-01-01"   >> $GITHUB_ENV
-          echo "PART=part1"       >> $GITHUB_ENV
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
+            START=2020-01-01
+            END=2022-01-01
+          else
+            START=2022-01-01
+            END=$(date -I -d "yesterday")
+          fi
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=$END"   >> $GITHUB_OUTPUT
 
-      - name: 🌐 Download Metrics 2020–2022
-        run: ./metrics/download_metrics_range.sh "$START" "$END" "$PART"
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.metric }} / ${{ matrix.part }}
+        run: |
+          OUT=metrics/${{ matrix.symbol }}/${{ matrix.metric }}/${{ matrix.part }}
+          mkdir -p "$OUT"
+          ./metrics/download_metrics_range.sh \
+            "${{ matrix.symbol }}" \
+            "${{ matrix.metric }}" \
+            "${{ steps.dates.outputs.start }}" \
+            "${{ steps.dates.outputs.end }}" \
+            "$OUT"
 
-      - name: 📦 Zip & keine leeren Ordner
+      - name: 📦 ZIP & Upload
         run: |
           mkdir -p artifacts
-          shopt -s globstar nullglob
-          DIR=metrics/${PART}
-          files=( "$DIR"/**/*.json )
+          DIR=metrics/${{ matrix.symbol }}/${{ matrix.metric }}/${{ matrix.part }}
+          files=( "$DIR"/*.json )
           if (( ${#files[@]} )); then
-            zip -j artifacts/metrics-${PART}-2020-2022.zip "${files[@]}"
-            echo "→ metrics-${PART}-2020-2022.zip (${#files[@]} files)"
+            ZIP=artifacts/metrics-${{ matrix.symbol }}-${{ matrix.metric }}-${{ matrix.part }}.zip
+            zip -j "$ZIP" "${files[@]}"
+            echo "→ $ZIP erstellt mit ${#files[@]} Dateien"
           else
-            echo "⏩ Keine Metrics für $DIR"
+            echo "❌ Keine JSONs in $DIR – Job fehlschlagen"
+            exit 1
           fi
 
       - name: 🚀 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-2020-2022
-          path: artifacts/metrics-part1-2020-2022.zip
-
-  download-2022-now:
-    name: 🔹 2022→gestern Metrics
-    needs: download-2020-2022
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: ⚙️ Script ausführbar machen
-        run: chmod +x metrics/download_metrics_range.sh
-
-      - name: 📅 Datum setzen 2022–gestern
-        run: |
-          echo "START=2022-01-01" >> $GITHUB_ENV
-          echo "END=$(date -I -d 'yesterday')" >> $GITHUB_ENV
-          echo "PART=part2"                      >> $GITHUB_ENV
-
-      - name: 🌐 Download Metrics 2022–gestern
-        run: ./metrics/download_metrics_range.sh "$START" "$END" "$PART"
-
-      - name: 📦 Zip & keine leeren Ordner
-        run: |
-          mkdir -p artifacts
-          shopt -s globstar nullglob
-          DIR=metrics/${PART}
-          files=( "$DIR"/**/*.json )
-          if (( ${#files[@]} )); then
-            zip -j artifacts/metrics-${PART}-2022-gestern.zip "${files[@]}"
-            echo "→ metrics-${PART}-2022-gestern.zip (${#files[@]} files)"
-          else
-            echo "⏩ Keine Metrics für $DIR"
-          fi
-
-      - name: 🚀 Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: metrics-2022-gestern
-          path: artifacts/metrics-part2-2022-gestern.zip
-
+          name: metrics-${{ matrix.symbol }}-${{ matrix.metric }}-${{ matrix.part }}
+          path: artifacts/metrics-${{ matrix.symbol }}-${{ matrix.metric }}-${{ matrix.part }}.zip
