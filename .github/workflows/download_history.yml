@@ -1,110 +1,69 @@
-name: 📥 Download History Data (ab 2020)
+name: 📥 Download Candlestick History (Parallel)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download-2020-2022:
-    name: 🔹 2020→2022 History
+  download:
+    # jeweils Symbol｜Interval｜Part im Job-Namen
+    name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        interval: [1m, 5m, 15m, 1h, 4h]
+        part:     [part1, part2]
 
     steps:
-      - uses: actions/checkout@v3
+      - name: 🔄 Checkout repository
+        uses: actions/checkout@v3
 
-      - name: ⚙️ Skript ausführbar machen
+      - name: ⚙️  Skript ausführbar machen
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Datum setzen 2020–2022
+      - name: 📅 Berechne Datumsspanne für ${{ matrix.part }}
+        id: dates
         run: |
-          echo "START=2020-01-01" >> $GITHUB_ENV
-          echo "END=2022-01-01"   >> $GITHUB_ENV
-          echo "PART=part1"       >> $GITHUB_ENV
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
+            # von Start (hier 2020-01-01) bis 2 Jahre später
+            START=2020-01-01
+            END=2022-01-01
+          else
+            # von 2022-01-01 bis gestern
+            START=2022-01-01
+            END=$(date -I -d "yesterday")
+          fi
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=$END"   >> $GITHUB_OUTPUT
 
-      - name: 🌐 Download Vision-Daily-Zips 2020–2022
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
-          SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
-          INTERVALS=(1m 5m 15m 1h 4h)
-          for sym in "${SYMBOLS[@]}"; do
-            for iv in "${INTERVALS[@]}"; do
-              OUT=historical/${sym}/${iv}/${PART}
-              mkdir -p "$OUT"
-              ./train/download_data_range.sh "$sym" "$iv" "$START" "$END" "$OUT"
-            done
-          done
+          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          mkdir -p "$OUT"
+          ./train/download_data_range.sh \
+            "${{ matrix.symbol }}" \
+            "${{ matrix.interval }}" \
+            "${{ steps.dates.outputs.start }}" \
+            "${{ steps.dates.outputs.end }}" \
+            "$OUT"
 
-      - name: 📦 Zip & keine leeren Ordner
-        run: |
-          mkdir -p artifacts
-          shopt -s nullglob
-          for sym in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
-            for iv in 1m 5m 15m 1h 4h; do
-              DIR=historical/${sym}/${iv}/${PART}
-              ZIP=artifacts/hist-${sym}-${iv}-${PART}.zip
-              files=( "$DIR"/*.zip )
-              if (( ${#files[@]} )); then
-                zip -j "$ZIP" "${files[@]}"
-                echo "→ $ZIP (${#files[@]} files)"
-              else
-                echo "⏩ Kein Data für $sym $iv $PART"
-              fi
-            done
-          done
-
-      - name: 🚀 Upload Artifacts Part1
-        uses: actions/upload-artifact@v4
-        with:
-          name: history-2020-2022
-          path: artifacts/*.zip
-
-  download-2022-now:
-    name: 🔹 2022→gestern History
-    needs: download-2020-2022
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: ⚙️ Skript ausführbar machen
-        run: chmod +x train/download_data_range.sh
-
-      - name: 📅 Datum setzen 2022–gestern
-        run: |
-          echo "START=2022-01-01" >> $GITHUB_ENV
-          echo "END=$(date -I -d 'yesterday')" >> $GITHUB_ENV
-          echo "PART=part2"                   >> $GITHUB_ENV
-
-      - name: 🌐 Download Vision-Daily-Zips 2022–gestern
-        run: |
-          SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
-          INTERVALS=(1m 5m 15m 1h 4h)
-          for sym in "${SYMBOLS[@]}"; do
-            for iv in "${INTERVALS[@]}"; do
-              OUT=historical/${sym}/${iv}/${PART}
-              mkdir -p "$OUT"
-              ./train/download_data_range.sh "$sym" "$iv" "$START" "$END" "$OUT"
-            done
-          done
-
-      - name: 📦 Zip & keine leeren Ordner
+      - name: 📦 ZIP & Upload
         run: |
           mkdir -p artifacts
-          shopt -s nullglob
-          for sym in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
-            for iv in 1m 5m 15m 1h 4h; do
-              DIR=historical/${sym}/${iv}/${PART}
-              ZIP=artifacts/hist-${sym}-${iv}-${PART}.zip
-              files=( "$DIR"/*.zip )
-              if (( ${#files[@]} )); then
-                zip -j "$ZIP" "${files[@]}"
-                echo "→ $ZIP (${#files[@]} files)"
-              else
-                echo "⏩ Kein Data für $sym $iv $PART"
-              fi
-            done
-          done
+          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          files=( "$DIR"/*.zip )
+          if (( ${#files[@]} )); then
+            ZIP=artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
+            zip -j "$ZIP" "${files[@]}"
+            echo "→ $ZIP created with ${#files[@]} files"
+          else
+            echo "❌ No files to zip in $DIR — failing job!"
+            exit 1
+          fi
 
-      - name: 🚀 Upload Artifacts Part2
+      - name: 🚀 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: history-2022-gestern
-          path: artifacts/*.zip
+          name: history-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}
+          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
