@@ -10,7 +10,6 @@ on:
 
 jobs:
   download:
-    # Parallel für jedes Symbol｜Interval｜Part
     name: 🔄 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
 
@@ -22,11 +21,13 @@ jobs:
         part:     [part1, part2]
 
     steps:
-      # 1) checkout
+      # 1) Holen des Repos mit voller History, damit Pull/Rebase zuverlässig funktioniert
       - name: 🔀 Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-      # 2) Git user konfigurieren
+      # 2) Git-User konfigurieren
       - name: ⚙️ Configure Git user
         run: |
           git config user.name  "github-actions[bot]"
@@ -50,7 +51,7 @@ jobs:
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=$END"   >> $GITHUB_OUTPUT
 
-      # 5) Download der historischen Daten
+      # 5) Herunterladen
       - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -62,7 +63,7 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      # 6) ZIP entpacken + aufräumen
+      # 6) Entpacken & ZIPs löschen
       - name: 📂 Unzip & cleanup
         run: |
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -71,16 +72,20 @@ jobs:
           done
           rm -f "$DIR"/*.zip
 
-      # 7) Commit & Push der neuen CSVs
+      # 7) Stashen → Pull/Rebase → Pop → Commit & Push
       - name: 🔄 Commit & Push CSVs into repo
         run: |
-          # Hol erst die aktuellste main
+          # stash alle neuen Dateien
+          git stash push --include-untracked -m "pre-pull stash"
+          # aktuelle main holen
           git pull --rebase origin main
+          # wieder zurückholen
+          git stash pop
 
-          # Stage alle CSVs in diesem Verzeichnis
+          # stage nur dieses Unterverzeichnis
           git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
 
-          # Nur committen, wenn es Änderungen gibt
+          # commit & push nur, wenn es wirklich neue CSVs gab
           if ! git diff --cached --quiet; then
             git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }} CSVs up to $(date -I) [skip ci]"
             git push origin HEAD:main
