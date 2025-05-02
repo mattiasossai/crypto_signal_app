@@ -1,13 +1,14 @@
-name: 📥 Download Candlestick History (Parallel)
+# .github/workflows/history_download.yml
+name: 📥 Download Candlestick History
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
-    # jeweils Symbol｜Interval｜Part im Job-Namen
+  download-history:
     name: 📦 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
@@ -16,27 +17,27 @@ jobs:
         part:     [part1, part2]
 
     steps:
+      # 1) Repository auschecken
       - name: 🔄 Checkout repository
         uses: actions/checkout@v3
 
-      - name: ⚙️  Skript ausführbar machen
+      # 2) Download-Script ausführbar machen
+      - name: ⚙️ Skript ausführbar machen
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Berechne Datumsspanne für ${{ matrix.part }}
+      # 3) Datumsspanne berechnen
+      - name: 📅 Datumsspanne berechnen
         id: dates
         run: |
           if [[ "${{ matrix.part }}" == "part1" ]]; then
-            # von Start (hier 2020-01-01) bis 2 Jahre später
-            START=2020-01-01
-            END=2022-01-01
+            echo "start=2020-01-01" >> $GITHUB_OUTPUT
+            echo "end=2022-01-01"   >> $GITHUB_OUTPUT
           else
-            # von 2022-01-01 bis gestern
-            START=2022-01-01
-            END=$(date -I -d "yesterday")
+            echo "start=2022-01-01" >> $GITHUB_OUTPUT
+            echo "end=$(date -I -d "yesterday")" >> $GITHUB_OUTPUT
           fi
-          echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END"   >> $GITHUB_OUTPUT
 
+      # 4) Zips herunterladen
       - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -48,22 +49,17 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      - name: 📦 ZIP & Upload
+      # 5) Alle .zip-Dateien entpacken
+      - name: 📥 Unzip in ${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
         run: |
-          mkdir -p artifacts
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
-          files=( "$DIR"/*.zip )
-          if (( ${#files[@]} )); then
-            ZIP=artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
-            zip -j "$ZIP" "${files[@]}"
-            echo "→ $ZIP created with ${#files[@]} files"
-          else
-            echo "❌ No files to zip in $DIR — failing job!"
-            exit 1
-          fi
+          for z in "$DIR"/*.zip; do
+            unzip -q "$z" -d "$DIR"
+          done
 
-      - name: 🚀 Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: history-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}
-          path: artifacts/hist-${{ matrix.symbol }}-${{ matrix.interval }}-${{ matrix.part }}.zip
+      # 6) Aufräumen: ZIP-Dateien löschen
+      - name: 🧹 Alte ZIP-Dateien entfernen
+        run: |
+          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          rm -f "$DIR"/*.zip
+
