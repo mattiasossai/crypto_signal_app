@@ -42,25 +42,27 @@ jobs:
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: 🌐 Download metrics
+      - name: 🌐 Download metrics JSONs
         run: |
           ./metrics/download_metrics_range.sh "$START" "$END" "${{ matrix.part }}"
 
-      - name: 🔄 Commit & Push metrics into repo
+      - name: 🔄 Commit & Push JSON into repo
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # stash any local changes (e.g. timestamps), pull latest main, then pop back
           git stash push --include-untracked -m "pre-pull stash"
           git fetch origin main
           git rebase origin/main
-          git stash pop
+          git stash pop || true
 
+          # stage exactly the JSONs for this metric/part
           git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
 
           if ! git diff --cached --quiet; then
             git commit -m "feat(metrics): add ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
-            echo "→ No new metrics for ${{ matrix.metric }} / ${{ matrix.part }}"
+            echo "→ No new JSONs for ${{ matrix.metric }} / ${{ matrix.part }}"
           fi
