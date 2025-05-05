@@ -1,10 +1,7 @@
-name: 📊 Download 4yr Metrics (6 Jobs)
+name: 📊 Download 4yr Metrics into Repo
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   download:
@@ -22,7 +19,7 @@ jobs:
           - part2
 
     steps:
-      - name: Checkout repository
+      - name: 🔀 Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -30,23 +27,22 @@ jobs:
       - name: Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
 
-      - name: Make script executable
+      - name: 🔧 Make script executable
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: Compute date range for ${{ matrix.part }}
-        id: dates
+      - name: 📅 Compute date range
         run: |
           if [ "${{ matrix.part }}" = "part1" ]; then
             START="2020-01-01"
             END="2022-01-01"
           else
             START="2022-01-01"
-            END="$(date -I -d "yesterday")"
+            END=$(date -I -d "yesterday")
           fi
-          echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END"     >> $GITHUB_OUTPUT
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download all metrics for ${{ matrix.part }}
+      - name: 🌐 Download metrics
         run: |
           ./metrics/download_metrics_range.sh "$START" "$END" "${{ matrix.part }}"
 
@@ -60,10 +56,10 @@ jobs:
           git rebase origin/main
           git stash pop
 
-          git add -A metrics/${{ matrix.part }}
+          git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
 
           if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add ${{ matrix.metric }} ${{ matrix.part }} up to $(date -I) [skip ci]"
+            git commit -m "feat(metrics): add ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
             echo "→ No new metrics for ${{ matrix.metric }} / ${{ matrix.part }}"
