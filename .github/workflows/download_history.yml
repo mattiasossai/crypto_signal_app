@@ -2,11 +2,9 @@ name: 📥 Download Candlestick History into Repo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'historical/**'
+
+permissions:
+  contents: write
 
 jobs:
   download:
@@ -21,23 +19,19 @@ jobs:
         part:     [part1, part2]
 
     steps:
-      # 1) Holen des Repos mit voller History, damit Pull/Rebase zuverlässig funktioniert
       - name: 🔀 Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      # 2) Git-User konfigurieren
       - name: ⚙️ Configure Git user
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # 3) Download-Script ausführbar machen
       - name: 🔧 Make download script executable
         run: chmod +x train/download_data_range.sh
 
-      # 4) Datumsspanne berechnen
       - name: 📅 Calculate date range for ${{ matrix.part }}
         id: dates
         run: |
@@ -51,7 +45,6 @@ jobs:
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=$END"   >> $GITHUB_OUTPUT
 
-      # 5) Herunterladen
       - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -63,7 +56,6 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      # 6) Entpacken & ZIPs löschen
       - name: 📂 Unzip & cleanup
         run: |
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
@@ -72,20 +64,15 @@ jobs:
           done
           rm -f "$DIR"/*.zip
 
-      # 7) Stashen → Pull/Rebase → Pop → Commit & Push
       - name: 🔄 Commit & Push CSVs into repo
         run: |
-          # stash alle neuen Dateien
           git stash push --include-untracked -m "pre-pull stash"
-          # aktuelle main holen
-          git pull --rebase origin main
-          # wieder zurückholen
+          git fetch origin main
+          git rebase origin/main
           git stash pop
 
-          # stage nur dieses Unterverzeichnis
           git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
 
-          # commit & push nur, wenn es wirklich neue CSVs gab
           if ! git diff --cached --quiet; then
             git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }} CSVs up to $(date -I) [skip ci]"
             git push origin HEAD:main
