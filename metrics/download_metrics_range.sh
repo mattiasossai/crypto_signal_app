@@ -12,10 +12,11 @@ END="$2"
 PART="$3"
 
 SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
+
 to_ms(){ date -d "$1" +%s000; }
 
-BASE="metrics/${PART}"
-mkdir -p "${BASE}/open_interest" "${BASE}/funding_rate" "${BASE}/liquidity"
+TARGET="metrics/${PART}"
+mkdir -p "${TARGET}/open_interest" "${TARGET}/funding_rate" "${TARGET}/liquidity"
 
 # 1) Open Interest (1d)
 cur="$START"
@@ -24,7 +25,7 @@ while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
   s=$(to_ms "$cur") e=$(to_ms "$nxt")
   for sym in "${SYMBOLS[@]}"; do
     curl -s "${WORKER_URL}/open-interest?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}" \
-      > "${BASE}/open_interest/${sym}_${cur}.json"
+      > "${TARGET}/open_interest/${sym}_${cur}.json"
   done
   cur="$nxt"
 done
@@ -37,7 +38,7 @@ while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     e=$(date -d "$cur +$((h+8)) hour" +%s000)
     for sym in "${SYMBOLS[@]}"; do
       curl -s "${WORKER_URL}/funding-rate?symbol=${sym}&startTime=${s}&endTime=${e}" \
-        > "${BASE}/funding_rate/${sym}_${cur}_${h}.json"
+        > "${TARGET}/funding_rate/${sym}_${cur}_${h}.json"
     done
   done
   cur=$(date -I -d "$cur +1 day")
@@ -48,7 +49,7 @@ cur="$START"
 while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
   for sym in "${SYMBOLS[@]}"; do
     curl -s "${WORKER_URL}/liquidity?symbol=${sym}" \
-      > "${BASE}/liquidity/${sym}_${cur}.json"
+      > "${TARGET}/liquidity/${sym}_${cur}.json"
   done
   cur=$(date -I -d "$cur +1 day")
 done
