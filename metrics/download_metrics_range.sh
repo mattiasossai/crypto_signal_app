@@ -6,19 +6,16 @@ if [ $# -ne 3 ]; then
   exit 1
 fi
 
-# ★ WORKER_URL und Proxy müssen per env gesetzt werden
 WORKER_URL="${WORKER_URL:?Bitte setze WORKER_URL als ENV!}"
-
 START="$1"
 END="$2"
 PART="$3"
 
 SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
-
 to_ms(){ date -d "$1" +%s000; }
 
-TARGET="metrics/${PART}"
-mkdir -p "${TARGET}/open_interest" "${TARGET}/funding_rate" "${TARGET}/liquidity"
+BASE="metrics/${PART}"
+mkdir -p "${BASE}/open_interest" "${BASE}/funding_rate" "${BASE}/liquidity"
 
 # 1) Open Interest (1d)
 cur="$START"
@@ -27,7 +24,7 @@ while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
   s=$(to_ms "$cur") e=$(to_ms "$nxt")
   for sym in "${SYMBOLS[@]}"; do
     curl -s "${WORKER_URL}/open-interest?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}" \
-      > "${TARGET}/open_interest/${sym}_${cur}.json"
+      > "${BASE}/open_interest/${sym}_${cur}.json"
   done
   cur="$nxt"
 done
@@ -40,7 +37,7 @@ while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     e=$(date -d "$cur +$((h+8)) hour" +%s000)
     for sym in "${SYMBOLS[@]}"; do
       curl -s "${WORKER_URL}/funding-rate?symbol=${sym}&startTime=${s}&endTime=${e}" \
-        > "${TARGET}/funding_rate/${sym}_${cur}_${h}.json"
+        > "${BASE}/funding_rate/${sym}_${cur}_${h}.json"
     done
   done
   cur=$(date -I -d "$cur +1 day")
@@ -51,7 +48,8 @@ cur="$START"
 while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
   for sym in "${SYMBOLS[@]}"; do
     curl -s "${WORKER_URL}/liquidity?symbol=${sym}" \
-      > "${TARGET}/liquidity/${sym}_${cur}.json"
+      > "${BASE}/liquidity/${sym}_${cur}.json"
   done
   cur=$(date -I -d "$cur +1 day")
 done
+
