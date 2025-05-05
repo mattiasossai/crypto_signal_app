@@ -6,6 +6,7 @@ if [ $# -ne 3 ]; then
   exit 1
 fi
 
+# ★ WORKER_URL muss per ENV gesetzt sein
 WORKER_URL="${WORKER_URL:?Bitte setze WORKER_URL als ENV!}"
 START="$1"
 END="$2"
@@ -53,4 +54,3 @@ while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
   done
   cur=$(date -I -d "$cur +1 day")
 done
-
