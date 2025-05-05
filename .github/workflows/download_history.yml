@@ -2,9 +2,11 @@ name: 📥 Download Candlestick History into Repo
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'historical/**'
 
 jobs:
   download:
@@ -32,7 +34,7 @@ jobs:
       - name: 🔧 Make download script executable
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Calculate date range for ${{ matrix.part }}
+      - name: 📅 Calculate date range
         id: dates
         run: |
           if [[ "${{ matrix.part }}" == "part1" ]]; then
@@ -45,7 +47,7 @@ jobs:
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=$END"   >> $GITHUB_OUTPUT
 
-      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}
+      - name: 🌐 Download data
         run: |
           OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
           mkdir -p "$OUT"
@@ -74,7 +76,7 @@ jobs:
           git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
 
           if ! git diff --cached --quiet; then
-            git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} ${{ matrix.part }} CSVs up to $(date -I) [skip ci]"
+            git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
             echo "→ No new CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}"
