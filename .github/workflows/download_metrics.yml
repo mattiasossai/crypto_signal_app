@@ -3,6 +3,9 @@ name: 📊 Download 4yr Metrics (6 Jobs)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   download:
     name: 🔄 ${{ matrix.metric }} ➡️ ${{ matrix.part }}
@@ -10,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        metric: 
+        metric:
           - open_interest
           - funding_rate
           - liquidity
@@ -21,6 +24,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
@@ -29,6 +34,7 @@ jobs:
         run: chmod +x metrics/download_metrics_range.sh
 
       - name: Compute date range for ${{ matrix.part }}
+        id: dates
         run: |
           if [ "${{ matrix.part }}" = "part1" ]; then
             START="2020-01-01"
@@ -37,23 +43,28 @@ jobs:
             START="2022-01-01"
             END="$(date -I -d "yesterday")"
           fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=$END"     >> $GITHUB_OUTPUT
 
       - name: Download all metrics for ${{ matrix.part }}
         run: |
           ./metrics/download_metrics_range.sh "$START" "$END" "${{ matrix.part }}"
 
-      - name: Zip only ${{ matrix.metric }}
+      - name: 🔄 Commit & Push metrics into repo
         run: |
-          mkdir -p artifacts
-          ZIP=artifacts/metrics-${{ matrix.metric }}-${{ matrix.part }}.zip
-          DIR=metrics/${{ matrix.part }}/${{ matrix.metric }}
-          echo "→ Zipping $DIR → $ZIP"
-          zip -j "$ZIP" "$DIR"/*.json
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: metrics-${{ matrix.metric }}-${{ matrix.part }}
-          path: artifacts/metrics-${{ matrix.metric }}-${{ matrix.part }}.zip
+          git stash push --include-untracked -m "pre-pull stash"
+          git fetch origin main
+          git rebase origin/main
+          git stash pop
+
+          git add -A metrics/${{ matrix.part }}
+
+          if ! git diff --cached --quiet; then
+            git commit -m "feat(metrics): add ${{ matrix.metric }} ${{ matrix.part }} up to $(date -I) [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "→ No new metrics for ${{ matrix.metric }} / ${{ matrix.part }}"
+          fi
