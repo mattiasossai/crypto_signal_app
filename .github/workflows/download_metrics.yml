@@ -1,19 +1,25 @@
-name: 📊 Download 4yr Metrics (3×2 parallel jobs)
+name: 📊 Download 4yr Metrics (6 Jobs)
 
 on:
   workflow_dispatch:
 
 jobs:
-  open_interest:
-    name: 🔄 Open Interest → ${{ matrix.part }}
+  download:
+    name: 🔄 ${{ matrix.metric }} ➡️ ${{ matrix.part }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        part: [part1, part2]
+        metric:
+          - open_interest
+          - funding_rate
+          - liquidity
+        part:
+          - part1
+          - part2
 
     steps:
-      - name: 🔀 Checkout repository
+      - name: 🔀 Checkout repository (full history)
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -21,147 +27,61 @@ jobs:
       - name: 🌐 Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
 
-      - name: 🛠️ Make script executable
+      - name: 🛠 Make script executable
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: 📅 Compute date range
+      - name: 📅 Compute date range for ${{ matrix.part }}
+        id: dates
         run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
-            START="2020-01-01"
-            END="2022-01-01"
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
+            echo "START=2020-01-01" >> $GITHUB_ENV
+            echo "END=2022-01-01"   >> $GITHUB_ENV
           else
-            START="2022-01-01"
-            END="$(date -I -d "yesterday")"
+            echo "START=2022-01-01" >> $GITHUB_ENV
+            echo "END=$(date -I -d 'yesterday')" >> $GITHUB_ENV
           fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
 
-      - name: 🌍 Download open_interest JSONs
+      - name: 🌐 Download metrics JSONs
         run: |
           ./metrics/download_metrics_range.sh \
-            open_interest \
+            "${{ matrix.metric }}" \
             "$START" \
             "$END" \
             "${{ matrix.part }}"
 
-      - name: 🔄 Commit & Push open_interest JSONs
+      - name: 🔍 Test sample JSON for errors
         run: |
+          SAMPLE="metrics/${{ matrix.part }}/${{ matrix.metric }}/BTCUSDT_${START}.json"
+          if jq -e '.error' "$SAMPLE" >/dev/null 2>&1; then
+            echo "⚠️ API returned error in $SAMPLE – skipping commit."
+            exit 0
+          else
+            echo "✅ Sample JSON OK."
+          fi
+
+      - name: 🔄 Commit & Push JSON into repo
+        run: |
+          # configure git
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 1) stash everything (chmod + script changes etc)
+          git stash push --include-untracked -m "pre-rebase stash"
+
+          # 2) bring local main up to date
           git fetch origin main
           git rebase origin/main
-          git add -A metrics/${{ matrix.part }}/open_interest
+
+          # 3) reapply stashed changes (JSON + script)
+          git stash pop --index || true
+
+          # 4) stage only the freshly downloaded JSONs
+          git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
+
+          # 5) commit & push if there is anything new
           if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add open_interest part=${{ matrix.part }} up to $(date -I) [skip ci]"
+            git commit -m "feat(metrics): add ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
-            echo "→ No new open_interest for ${{ matrix.part }}"
-          fi
-
-  funding_rate:
-    name: 🔄 Funding Rate → ${{ matrix.part }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [part1, part2]
-
-    steps:
-      - name: 🔀 Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: 🌐 Set WORKER_URL
-        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
-
-      - name: 🛠️ Make script executable
-        run: chmod +x metrics/download_metrics_range.sh
-
-      - name: 📅 Compute date range
-        run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
-            START="2020-01-01"
-            END="2022-01-01"
-          else
-            START="2022-01-01"
-            END="$(date -I -d "yesterday")"
-          fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
-
-      - name: 🌍 Download funding_rate JSONs
-        run: |
-          ./metrics/download_metrics_range.sh \
-            funding_rate \
-            "$START" \
-            "$END" \
-            "${{ matrix.part }}"
-
-      - name: 🔄 Commit & Push funding_rate JSONs
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git rebase origin/main
-          git add -A metrics/${{ matrix.part }}/funding_rate
-          if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add funding_rate part=${{ matrix.part }} up to $(date -I) [skip ci]"
-            git push origin HEAD:main
-          else
-            echo "→ No new funding_rate for ${{ matrix.part }}"
-          fi
-
-  liquidity:
-    name: 🔄 Liquidity → ${{ matrix.part }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [part1, part2]
-
-    steps:
-      - name: 🔀 Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: 🌐 Set WORKER_URL
-        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
-
-      - name: 🛠️ Make script executable
-        run: chmod +x metrics/download_metrics_range.sh
-
-      - name: 📅 Compute date range
-        run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
-            START="2020-01-01"
-            END="2022-01-01"
-          else
-            START="2022-01-01"
-            END="$(date -I -d "yesterday")"
-          fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
-
-      - name: 🌍 Download liquidity JSONs
-        run: |
-          ./metrics/download_metrics_range.sh \
-            liquidity \
-            "$START" \
-            "$END" \
-            "${{ matrix.part }}"
-
-      - name: 🔄 Commit & Push liquidity JSONs
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git rebase origin/main
-          git add -A metrics/${{ matrix.part }}/liquidity
-          if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add liquidity part=${{ matrix.part }} up to $(date -I) [skip ci]"
-            git push origin HEAD:main
-          else
-            echo "→ No new liquidity for ${{ matrix.part }}"
+            echo "→ No new ${ matrix.metric } for ${{ matrix.part }}"
           fi
