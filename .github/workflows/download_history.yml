@@ -27,10 +27,9 @@ jobs:
       - name: 🔧 Make download script executable
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Calculate rolling 30 d range
+      - name: 📅 Calculate rolling 30d range
         id: dates
         run: |
-          # Ende = gestern, Start = 30 Tage davor
           END=$(date -I -d "yesterday")
           START=$(date -I -d "$END -30 days")
           echo "start=$START" >> $GITHUB_OUTPUT
@@ -65,9 +64,7 @@ jobs:
           git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
 
           if ! git diff --cached --quiet; then
-            git commit -m "feat(history): add rolling ${{
- matrix.symbol }} ${{
- matrix.interval }} up to $(date -I) [skip ci]"
+            git commit -m "feat(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
             echo "→ No new CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }}"
