@@ -1,24 +1,17 @@
-name: 📥 Download Candlestick History into Repo
+name: 📥 Download Rolling 30d Candlestick History into Repo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'historical/**'
 
 jobs:
   download:
-    name: 🔄 ${{ matrix.symbol }}｜${{ matrix.interval }}｜${{ matrix.part }}
+    name: 🔄 ${{ matrix.symbol }} ｜ ${{ matrix.interval }}
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
-        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
         interval: [1m, 5m, 15m, 1h, 4h]
-        part:     [part1, part2]
 
     steps:
       - name: 🔀 Checkout repository
@@ -34,22 +27,18 @@ jobs:
       - name: 🔧 Make download script executable
         run: chmod +x train/download_data_range.sh
 
-      - name: 📅 Calculate date range
+      - name: 📅 Calculate rolling 30 d range
         id: dates
         run: |
-          if [[ "${{ matrix.part }}" == "part1" ]]; then
-            START=2020-01-01
-            END=2022-01-01
-          else
-            START=2022-01-01
-            END=$(date -I -d "yesterday")
-          fi
+          # Ende = gestern, Start = 30 Tage davor
+          END=$(date -I -d "yesterday")
+          START=$(date -I -d "$END -30 days")
           echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END"   >> $GITHUB_OUTPUT
+          echo "end=$END"     >> $GITHUB_OUTPUT
 
-      - name: 🌐 Download data
+      - name: 🌐 Download ${{ matrix.symbol }} / ${{ matrix.interval }} history
         run: |
-          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
           mkdir -p "$OUT"
           ./train/download_data_range.sh \
             "${{ matrix.symbol }}" \
@@ -60,7 +49,7 @@ jobs:
 
       - name: 📂 Unzip & cleanup
         run: |
-          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
           for z in "$DIR"/*.zip; do
             unzip -q "$z" -d "$DIR"
           done
@@ -71,13 +60,15 @@ jobs:
           git stash push --include-untracked -m "pre-pull stash"
           git fetch origin main
           git rebase origin/main
-          git stash pop
+          git stash pop || true
 
-          git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/${{ matrix.part }}
+          git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
 
           if ! git diff --cached --quiet; then
-            git commit -m "feat(history): add ${{ matrix.symbol }} ${{ matrix.interval }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
+            git commit -m "feat(history): add rolling ${{
+ matrix.symbol }} ${{
+ matrix.interval }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
-            echo "→ No new CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }} / ${{ matrix.part }}"
+            echo "→ No new CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }}"
           fi
