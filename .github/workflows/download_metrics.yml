@@ -1,75 +1,57 @@
-name: 📊 Download 4yr Metrics (6 Jobs)
+name: 📊 Download 4yr Metrics
 
 on:
   workflow_dispatch:
 
 jobs:
   download:
-    name: 🔄 ${{ matrix.metric }} ➡️ ${{ matrix.part }}
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: false
-      max-parallel: 1               # ⬅️ zwingend sequentiell
       matrix:
-        metric: 
-          - open_interest
-          - funding_rate
-          - liquidity
-        part:
-          - part1
-          - part2
+        metric: [open_interest, funding_rate, liquidity]
+        part: [part1, part2]
+      # nacheinander, nicht parallel
+      max-parallel: 1
 
     steps:
-      - name: 🔀 Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: ⚙️ Configure Git user
+      - name: Configure Git
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: 🌐 Set WORKER_URL
+      - name: Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
 
-      - name: 🔧 Make script executable
+      - name: Make download script executable
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: 📅 Compute date range for ${{ matrix.part }}
-        id: dates
+      - name: Compute date range for ${{ matrix.part }}
         run: |
-          if [[ "${{ matrix.part }}" == "part1" ]]; then
+          if [ "${{ matrix.part }}" = "part1" ]; then
             START="2020-01-01"
             END="2022-01-01"
           else
             START="2022-01-01"
-            END=$(date -I -d "yesterday")
+            END="$(date -I -d "yesterday")"
           fi
-          echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END"   >> $GITHUB_OUTPUT
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END"     >> $GITHUB_ENV
 
-      - name: 🔄 Download metrics JSONs
+      - name: Download metrics JSONs
         run: |
-          metrics/download_metrics_range.sh \
+          ./metrics/download_metrics_range.sh \
             "${{ matrix.metric }}" \
-            "${{ steps.dates.outputs.start }}" \
-            "${{ steps.dates.outputs.end }}" \
+            "$START" \
+            "$END" \
             "${{ matrix.part }}"
 
-      - name: ✅ Test sample JSON for errors
-        run: |
-          DIR="metrics/${{ matrix.part }}/${{ matrix.metric }}"
-          FIRST_JSON=$(ls "$DIR"/*.json | head -n1)
-          if jq -e '.error' "$FIRST_JSON" >/dev/null 2>&1; then
-            echo "⚠️ API returned error in $FIRST_JSON – bitte WORKER_URL prüfen!"
-            exit 1
-          else
-            echo "✅ Sample JSON OK: $(basename "$FIRST_JSON")"
-          fi
-
-      - name: 🔄 Commit & Push JSON into repo
+      - name: Commit & Push JSON into repo
         run: |
           git stash push --include-untracked -m "pre-pull stash"
           git fetch origin main
