@@ -5,33 +5,31 @@ on:
 
 jobs:
   download:
+    name: 🔄 ${{ matrix.metric }} ➡️ ${{ matrix.part }}
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: false
       matrix:
         metric: [open_interest, funding_rate, liquidity]
-        part: [part1, part2]
-      # nacheinander, nicht parallel
-      max-parallel: 1
+        part:   [part1, part2]
 
     steps:
-      - name: Checkout repository
+      # 1) Vollständiges Repo auschecken (fetch-depth:0 für pull/rebase)
+      - name: 🔀 Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Configure Git
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Set WORKER_URL
+      # 2) Worker-URL setzen
+      - name: 🌐 Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
 
-      - name: Make download script executable
+      # 3) Download-Script ausführbar machen
+      - name: 🛠️ Make script executable
         run: chmod +x metrics/download_metrics_range.sh
 
-      - name: Compute date range for ${{ matrix.part }}
+      # 4) Datumsspanne berechnen
+      - name: 📅 Compute date range
         run: |
           if [ "${{ matrix.part }}" = "part1" ]; then
             START="2020-01-01"
@@ -43,7 +41,8 @@ jobs:
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download metrics JSONs
+      # 5) JSONs herunterladen (löscht vorher alles in metrics/…)
+      - name: 🌍 Download metrics JSONs
         run: |
           ./metrics/download_metrics_range.sh \
             "${{ matrix.metric }}" \
@@ -51,13 +50,18 @@ jobs:
             "$END" \
             "${{ matrix.part }}"
 
-      - name: Commit & Push JSON into repo
+      # 6) Commit & Push der neuen/gelöschten JSONs
+      - name: 🔄 Commit & Push JSON into repo
         run: |
-          git stash push --include-untracked -m "pre-pull stash"
+          # Git-User konfigurieren
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Aktuellen Stand der remote main holen
           git fetch origin main
           git rebase origin/main
-          git stash pop
 
+          # Alle Änderungen (Löschungen + neue JSONs) in das Metrics-Subfolder
           git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
 
           if ! git diff --cached --quiet; then
