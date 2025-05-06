@@ -1,72 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# args: METRIC START_DATE END_DATE PART_NAME
-if [ $# -ne 4 ]; then
-  echo "Usage: $0 METRIC START_DATE END_DATE PART_NAME"
+# args: SYMBOL INTERVAL START_DATE END_DATE OUT_DIR
+if [ $# -ne 5 ]; then
+  echo "Usage: $0 SYMBOL INTERVAL START_DATE END_DATE OUT_DIR"
   exit 1
 fi
 
-METRIC="$1"
-START="$2"
-END="$3"
-PART="$4"
+SYMBOL="$1"
+INTERVAL="$2"
+START_DATE="$3"
+END_DATE="$4"
+OUT_DIR="$5"
 
-: "${WORKER_URL:?Please set WORKER_URL in env!}"
+mkdir -p "$OUT_DIR"
 
-# alle vorhandenen JSON löschen, damit sie neu überschrieben werden
-TARGET="metrics/${PART}/${METRIC}"
-rm -rf "$TARGET"
-mkdir -p "$TARGET"
+current="$START_DATE"
+stop=$(date -I -d "$END_DATE + 1 day")
 
-SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
+while [[ "$current" != "$stop" ]]; do
+  file="${OUT_DIR}/${SYMBOL}-${INTERVAL}-${current}.zip"
+  url="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${current}.zip"
 
-# konvertiert YYYY-MM-DD → ms
-to_ms(){ date -d "$1" +%s000; }
+  if [[ ! -f "$file" ]]; then
+    http_code=$(curl -sSL -w "%{http_code}" -o "$file" "$url" || true)
+    if [[ "$http_code" != "200" ]]; then
+      rm -f "$file"
+      echo "⚠️ $SYMBOL $INTERVAL $current → HTTP $http_code, skipping"
+    else
+      echo "✅ saved $file"
+    fi
+  else
+    echo "↪️ already exists $file"
+  fi
 
-if [[ "$METRIC" == "open_interest" ]]; then
-  # 1d Open Interest
-  cur="$START"
-  while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
-    nxt=$(date -I -d "$cur +1 day")
-    s=$(to_ms "$cur") e=$(to_ms "$nxt")
-    for sym in "${SYMBOLS[@]}"; do
-      curl -s "${WORKER_URL}/open-interest?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}" \
-        > "${TARGET}/${sym}_${cur}.json"
-      sleep 0.1
-    done
-    cur="$nxt"
-  done
-
-elif [[ "$METRIC" == "funding_rate" ]]; then
-  # 8h Funding Rate
-  cur="$START"
-  while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
-    for h in 0 8 16; do
-      s=$(date -d "$cur +${h} hour" +%s000)
-      e=$(date -d "$cur +$((h+8)) hour" +%s000)
-      for sym in "${SYMBOLS[@]}"; do
-        curl -s "${WORKER_URL}/funding-rate?symbol=${sym}&startTime=${s}&endTime=${e}" \
-          > "${TARGET}/${sym}_${cur}_${h}.json"
-        sleep 0.1
-      done
-    done
-    cur=$(date -I -d "$cur +1 day")
-  done
-
-elif [[ "$METRIC" == "liquidity" ]]; then
-  # tägliche Liquidity-Snapshot
-  cur="$START"
-  while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
-    for sym in "${SYMBOLS[@]}"; do
-      curl -s "${WORKER_URL}/liquidity?symbol=${sym}" \
-        > "${TARGET}/${sym}_${cur}.json"
-      sleep 0.1
-    done
-    cur=$(date -I -d "$cur +1 day")
-  done
-
-else
-  echo "Unknown metric: $METRIC"
-  exit 1
-fi
+  current=$(date -I -d "$current + 1 day")
+done
