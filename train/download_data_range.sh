@@ -2,6 +2,11 @@
 set -euo pipefail
 
 # args: SYMBOL INTERVAL START_DATE END_DATE OUT_DIR
+if [ $# -ne 5 ]; then
+  echo "Usage: $0 SYMBOL INTERVAL START_DATE END_DATE OUT_DIR"
+  exit 1
+fi
+
 SYMBOL="$1"
 INTERVAL="$2"
 START_DATE="$3"
@@ -11,6 +16,7 @@ OUT_DIR="$5"
 mkdir -p "$OUT_DIR"
 
 current="$START_DATE"
+# wir laufen bis inkl. END_DATE
 stop=$(date -I -d "$END_DATE + 1 day")
 
 while [[ "$current" != "$stop" ]]; do
