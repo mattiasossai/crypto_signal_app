@@ -1,4 +1,3 @@
-# .github/workflows/download_history.yml
 name: 📥 Download Candlestick History
 
 on:
@@ -10,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      max-parallel: 1                      # <<< hier der Trick!
+      max-parallel: 1
       matrix:
         symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
         interval: [1m, 5m, 15m, 1h, 4h]
@@ -48,13 +47,13 @@ jobs:
             "${{ steps.dates.outputs.end }}" \
             "$OUT"
 
-      - name: 📂 Unzip & cleanup (falls ZIPs)
+      - name: 📂 Unzip & cleanup
         run: |
           DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
           for z in "$DIR"/*.zip; do
-            unzip -q "$z" -d "$DIR"
-            rm -f "$z"
+            unzip -o -q "$z" -d "$DIR"
           done
+          rm -f "$DIR"/*.zip
 
       - name: 🔄 Commit & Push CSVs
         run: |
