@@ -1,34 +1,29 @@
-name: 📊 Download 4yr Metrics
+name: 📊 Download 4yr Metrics (3×2 parallel jobs)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
-    name: 🔄 ${{ matrix.metric }} ➡️ ${{ matrix.part }}
+  open_interest:
+    name: 🔄 Open Interest → ${{ matrix.part }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        metric: [open_interest, funding_rate, liquidity]
-        part:   [part1, part2]
+        part: [part1, part2]
 
     steps:
-      # 1) Vollständiges Repo auschecken (fetch-depth:0 für pull/rebase)
       - name: 🔀 Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      # 2) Worker-URL setzen
       - name: 🌐 Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
 
-      # 3) Download-Script ausführbar machen
       - name: 🛠️ Make script executable
         run: chmod +x metrics/download_metrics_range.sh
 
-      # 4) Datumsspanne berechnen
       - name: 📅 Compute date range
         run: |
           if [ "${{ matrix.part }}" = "part1" ]; then
@@ -41,32 +36,132 @@ jobs:
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      # 5) JSONs herunterladen (löscht vorher alles in metrics/…)
-      - name: 🌍 Download metrics JSONs
+      - name: 🌍 Download open_interest JSONs
         run: |
           ./metrics/download_metrics_range.sh \
-            "${{ matrix.metric }}" \
+            open_interest \
             "$START" \
             "$END" \
             "${{ matrix.part }}"
 
-      # 6) Commit & Push der neuen/gelöschten JSONs
-      - name: 🔄 Commit & Push JSON into repo
+      - name: 🔄 Commit & Push open_interest JSONs
         run: |
-          # Git-User konfigurieren
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Aktuellen Stand der remote main holen
           git fetch origin main
           git rebase origin/main
-
-          # Alle Änderungen (Löschungen + neue JSONs) in das Metrics-Subfolder
-          git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
-
+          git add -A metrics/${{ matrix.part }}/open_interest
           if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
+            git commit -m "feat(metrics): add open_interest part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
-            echo "→ No new metrics for ${{ matrix.metric }} / ${{ matrix.part }}"
+            echo "→ No new open_interest for ${{ matrix.part }}"
+          fi
+
+  funding_rate:
+    name: 🔄 Funding Rate → ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [part1, part2]
+
+    steps:
+      - name: 🔀 Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 🌐 Set WORKER_URL
+        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
+
+      - name: 🛠️ Make script executable
+        run: chmod +x metrics/download_metrics_range.sh
+
+      - name: 📅 Compute date range
+        run: |
+          if [ "${{ matrix.part }}" = "part1" ]; then
+            START="2020-01-01"
+            END="2022-01-01"
+          else
+            START="2022-01-01"
+            END="$(date -I -d "yesterday")"
+          fi
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END"     >> $GITHUB_ENV
+
+      - name: 🌍 Download funding_rate JSONs
+        run: |
+          ./metrics/download_metrics_range.sh \
+            funding_rate \
+            "$START" \
+            "$END" \
+            "${{ matrix.part }}"
+
+      - name: 🔄 Commit & Push funding_rate JSONs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
+          git add -A metrics/${{ matrix.part }}/funding_rate
+          if ! git diff --cached --quiet; then
+            git commit -m "feat(metrics): add funding_rate part=${{ matrix.part }} up to $(date -I) [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "→ No new funding_rate for ${{ matrix.part }}"
+          fi
+
+  liquidity:
+    name: 🔄 Liquidity → ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [part1, part2]
+
+    steps:
+      - name: 🔀 Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 🌐 Set WORKER_URL
+        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
+
+      - name: 🛠️ Make script executable
+        run: chmod +x metrics/download_metrics_range.sh
+
+      - name: 📅 Compute date range
+        run: |
+          if [ "${{ matrix.part }}" = "part1" ]; then
+            START="2020-01-01"
+            END="2022-01-01"
+          else
+            START="2022-01-01"
+            END="$(date -I -d "yesterday")"
+          fi
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END"     >> $GITHUB_ENV
+
+      - name: 🌍 Download liquidity JSONs
+        run: |
+          ./metrics/download_metrics_range.sh \
+            liquidity \
+            "$START" \
+            "$END" \
+            "${{ matrix.part }}"
+
+      - name: 🔄 Commit & Push liquidity JSONs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
+          git add -A metrics/${{ matrix.part }}/liquidity
+          if ! git diff --cached --quiet; then
+            git commit -m "feat(metrics): add liquidity part=${{ matrix.part }} up to $(date -I) [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "→ No new liquidity for ${{ matrix.part }}"
           fi
