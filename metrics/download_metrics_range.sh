@@ -15,22 +15,17 @@ PART="$4"
 : "${WORKER_URL:?Please set WORKER_URL in env!}"
 
 TARGET="metrics/${PART}/${METRIC}"
-
-# ─── 1) Alten Ordner komplett löschen ───────────────────────────────────────────
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
-# ─── 2) Liste der Symbole ──────────────────────────────────────────────────────
 SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
 
-# Hilfsfunktion: YYYY-MM-DD → Millisekunden (genau 13 Ziffern)
+# YYYY-MM-DD → Millisekunden (13 Ziffern)
 to_ms(){ date -d "$1" +%s000; }
 
-# ─── 3) Nach Metric aufsplitten ────────────────────────────────────────────────
 case "$METRIC" in
 
   open_interest)
-    # tägliche Open Interest (1d)
     cur="$START"
     while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
       nxt=$(date -I -d "$cur +1 day")
@@ -46,7 +41,6 @@ case "$METRIC" in
     ;;
 
   funding_rate)
-    # Funding Rate (alle 8h)
     cur="$START"
     while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
       for h in 0 8 16; do
@@ -63,7 +57,6 @@ case "$METRIC" in
     ;;
 
   liquidity)
-    # täglicher Liquidity-Snapshot
     cur="$START"
     while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
       for sym in "${SYMBOLS[@]}"; do
