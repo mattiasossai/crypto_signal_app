@@ -1,4 +1,4 @@
-name: 📊 Download 4yr Metrics into Repo
+name: 📊 Download 4yr Metrics (6 Jobs)
 
 on:
   workflow_dispatch:
@@ -19,49 +19,76 @@ jobs:
           - part2
 
     steps:
-      - name: 🔀 Checkout repository
+      # 1) Volles Repo auschecken
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: Set WORKER_URL
-        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
-
-      - name: 🔧 Make script executable
-        run: chmod +x metrics/download_metrics_range.sh
-
-      - name: 📅 Compute date range
-        run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
-            START="2020-01-01"
-            END="2022-01-01"
-          else
-            START="2022-01-01"
-            END=$(date -I -d "yesterday")
-          fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
-
-      - name: 🌐 Download metrics JSONs
-        run: |
-          ./metrics/download_metrics_range.sh "$START" "$END" "${{ matrix.part }}"
-
-      - name: 🔄 Commit & Push JSON into repo
+      # 2) Git-User
+      - name: Configure Git user
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # stash any local changes (e.g. timestamps), pull latest main, then pop back
+      # 3) WORKER_URL ins ENV
+      - name: Set WORKER_URL
+        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
+
+      # 4) Script ausführbar machen
+      - name: Make script executable
+        run: chmod +x metrics/download_metrics_range.sh
+
+      # 5) Datumsspanne berechnen
+      - name: Compute date range for ${{ matrix.part }}
+        run: |
+          if [ "${{ matrix.part }}" = "part1" ]; then
+            echo "START=2020-01-01" >> $GITHUB_ENV
+            echo "END=2022-01-01"   >> $GITHUB_ENV
+          else
+            echo "START=2022-01-01"                     >> $GITHUB_ENV
+            echo "END=$(date -I -d "yesterday")"        >> $GITHUB_ENV
+          fi
+
+      # 6) Alte JSONs löschen, damit wir wirklich alles neu holen
+      - name: Clear old JSONs
+        run: |
+          TARGET="metrics/${{ matrix.part }}/${{ matrix.metric }}"
+          rm -rf "$TARGET"
+          mkdir -p "$TARGET"
+
+      # 7) Download aller JSONs für genau diese Metrik
+      - name: Download metrics JSONs
+        run: |
+          ./metrics/download_metrics_range.sh \
+            "${{ matrix.metric }}" \
+            "$START" \
+            "$END" \
+            "${{ matrix.part }}"
+
+      # 8) Smoke-Test einer Beispiel-Datei
+      - name: Verify a sample JSON
+        run: |
+          SAMPLE="metrics/${{ matrix.part }}/${{ matrix.metric }}/BTCUSDT_${START}.json"
+          if jq -e '.error' "$SAMPLE" >/dev/null; then
+            echo "❌ API liefert error-Feld in $SAMPLE"
+            exit 1
+          else
+            echo "✅ Sample JSON OK."
+          fi
+
+      # 9) Commit & Push
+      - name: Commit & Push JSON into repo
+        run: |
           git stash push --include-untracked -m "pre-pull stash"
           git fetch origin main
           git rebase origin/main
-          git stash pop || true
+          git stash pop
 
-          # stage exactly the JSONs for this metric/part
           git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
 
           if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
+            git commit -m "feat(metrics): overwrite ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
             echo "→ No new JSONs for ${{ matrix.metric }} / ${{ matrix.part }}"
