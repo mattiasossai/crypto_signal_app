@@ -21,7 +21,7 @@ mkdir -p "$TARGET"
 
 SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
 
-# konvertiert YYYY-MM-DD → ms (13 Stellen)
+# konvertiert YYYY-MM-DD → Unix-Millisekunden (13 Stellen)
 to_ms(){ date -d "$1" +%s000; }
 
 if [[ "$METRIC" == "open_interest" ]]; then
