@@ -7,11 +7,12 @@ jobs:
   download:
     name: 🔄 ${{ matrix.metric }} ➡️ ${{ matrix.part }}
     runs-on: ubuntu-latest
+
     strategy:
-      max-parallel: 1
       fail-fast: false
+      max-parallel: 1               # ⬅️ zwingend sequentiell
       matrix:
-        metric:
+        metric: 
           - open_interest
           - funding_rate
           - liquidity
@@ -30,7 +31,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Set WORKER_URL
+      - name: 🌐 Set WORKER_URL
         run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
 
       - name: 🔧 Make script executable
@@ -39,46 +40,46 @@ jobs:
       - name: 📅 Compute date range for ${{ matrix.part }}
         id: dates
         run: |
-          if [ "${{ matrix.part }}" = "part1" ]; then
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"
             END="2022-01-01"
           else
             START="2022-01-01"
-            END="$(date -I -d "yesterday")"
+            END=$(date -I -d "yesterday")
           fi
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=$END"   >> $GITHUB_OUTPUT
 
-      - name: 📥 Download all metrics for ${{ matrix.metric }} / ${{ matrix.part }}
+      - name: 🔄 Download metrics JSONs
         run: |
-          ./metrics/download_metrics_range.sh \
+          metrics/download_metrics_range.sh \
             "${{ matrix.metric }}" \
-            "$START" \
-            "$END" \
+            "${{ steps.dates.outputs.start }}" \
+            "${{ steps.dates.outputs.end }}" \
             "${{ matrix.part }}"
 
-      - name: 🔍 Validate a sample JSON (no hard fail)
+      - name: ✅ Test sample JSON for errors
         run: |
-          SAMPLE="metrics/${{ matrix.part }}/${{ matrix.metric }}/BTCUSDT_${START}.json"
-          if jq -e '.error' "$SAMPLE" >/dev/null 2>&1; then
-            echo "⚠️ API returned error in $SAMPLE – überspringe Fehler."
+          DIR="metrics/${{ matrix.part }}/${{ matrix.metric }}"
+          FIRST_JSON=$(ls "$DIR"/*.json | head -n1)
+          if jq -e '.error' "$FIRST_JSON" >/dev/null 2>&1; then
+            echo "⚠️ API returned error in $FIRST_JSON – bitte WORKER_URL prüfen!"
+            exit 1
           else
-            echo "✅ Sample JSON OK."
+            echo "✅ Sample JSON OK: $(basename "$FIRST_JSON")"
           fi
 
-      - name: 🔄 Commit & Push JSONs into repo
+      - name: 🔄 Commit & Push JSON into repo
         run: |
-          # Stash everything, pull & reapply
           git stash push --include-untracked -m "pre-pull stash"
           git fetch origin main
           git rebase origin/main
           git stash pop
 
-          # Stage nur die gerade heruntergeladenen JSONs
           git add -A metrics/${{ matrix.part }}/${{ matrix.metric }}
 
           if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add ${{ matrix.metric }} ${{ matrix.part }} up to $(date -I) [skip ci]"
+            git commit -m "feat(metrics): add ${{ matrix.metric }} part=${{ matrix.part }} up to $(date -I) [skip ci]"
             git push origin HEAD:main
           else
             echo "→ No new metrics for ${{ matrix.metric }} / ${{ matrix.part }}"
