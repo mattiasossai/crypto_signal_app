@@ -1,79 +1,50 @@
-name: 📊 Download 4yr Metrics (3 Jobs, sequenziell)
+name: Download 4yr Metrics via Proxy
 
 on:
   workflow_dispatch:
 
 jobs:
-  download_metric:
-    name: 🔄 Download ${{ matrix.metric }} (part1 & part2)
+  download_metrics:
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: false
       matrix:
-        metric:
-          - open_interest
-          - funding_rate
-          - liquidity
-      # sorgt dafür, dass immer nur 1 Job gleichzeitig läuft
-      max-parallel: 1
+        metric: [open_interest, funding_rate, liquidity]
+        part: [part1, part2]
+    max-parallel: 1
+
+    env:
+      # Hier deine Render-Proxy-URL
+      PROXY_URL: https://crypto-signal-app.onrender.com
 
     steps:
-      - name: 🔀 Checkout repository (full history)
+      - name: Checkout repo
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      - name: 🌐 Set WORKER_URL
-        run: echo "WORKER_URL=${{ secrets.METRICS_WORKER_URL }}" >> $GITHUB_ENV
-
-      - name: 🛠 Make script executable
-        run: chmod +x metrics/download_metrics_range.sh
-
-      - name: 📥 Download part1 for ${{ matrix.metric }}
+      - name: Install dependencies
         run: |
-          START=2020-01-01
-          END=2022-01-01
-          ./metrics/download_metrics_range.sh "${{ matrix.metric }}" "$START" "$END" part1
+          sudo apt-get update
+          sudo apt-get install -y jq
 
-      - name: 📥 Download part2 for ${{ matrix.metric }}
+      - name: Download metrics via proxy
+        shell: bash
         run: |
-          START=2022-01-01
-          END=$(date -I -d "yesterday")
-          ./metrics/download_metrics_range.sh "${{ matrix.metric }}" "$START" "$END" part2
-
-      - name: 🔍 Sanity check sample JSON
-        run: |
-          SAMPLE="metrics/part1/${{ matrix.metric }}/BTCUSDT_2020-01-01.json"
-          if jq -e '.error' "$SAMPLE" >/dev/null 2>&1; then
-            echo "⚠️ API returned error in $SAMPLE"
-            exit 1
+          # Errechne START/END je nach part1/part2
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
+            START="2020-01-01"
+            END="2022-12-31"
           else
-            echo "✅ Sample JSON OK."
+            START="2023-01-01"
+            END=$(date -I -d "yesterday")
           fi
 
-      - name: 🔄 Commit & Push JSON into repo
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # 1) stash lokale Änderungen (chmod + usw.)
-          git stash push --include-untracked -m "pre-rebase stash"
-
-          # 2) fetch & rebase gegen remote/main
-          git fetch origin main
-          git rebase origin/main
-
-          # 3) stash pop (bringt die neuen JSONs zurück)
-          git stash pop --index || true
-
-          # 4) stage nur die Ordner für diese Metric
-          git add -A metrics/part1/${{ matrix.metric }} metrics/part2/${{ matrix.metric }}
-
-          # 5) commit & push falls neue Dateien
-          if ! git diff --cached --quiet; then
-            git commit -m "feat(metrics): add ${{ matrix.metric }} parts up to $(date -I) [skip ci]"
-            git push origin HEAD:main
-          else
-            echo "→ No new JSON for ${{ matrix.metric }}"
-          fi
+          chmod +x metrics/download_metrics_range.sh
+          # Aufruf mit METRIC START END PART
+          PROXY_URL="${PROXY_URL}" \
+            metrics/download_metrics_range.sh \
+              "${{ matrix.metric }}" \
+              "$START" \
+              "$END" \
+              "${{ matrix.part }}"
