@@ -12,7 +12,7 @@ START="$2"     # YYYY-MM-DD
 END="$3"       # YYYY-MM-DD (exclusive)
 PART="$4"      # part1 | part2
 
-# Wenn 5. Argument übergeben ist, nur dieses eine Symbol
+# Optional: nur ein Symbol, wenn 5. Argument gesetzt
 if [ $# -eq 5 ]; then
   SYMBOLS=("$5")
 else
@@ -21,7 +21,7 @@ fi
 
 : "${PROXY_URL:?Please set PROXY_URL in env!}"
 
-# Wir sind pro Job jeweils bei einem Symbol → TARGET entsprechend
+# Zielverzeichnis für diesen Job (je ein Symbol)
 TARGET="metrics/${PART}/${METRIC}/${SYMBOLS[0]}"
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
@@ -52,7 +52,8 @@ case "$METRIC" in
 
       for sym in "${SYMBOLS[@]}"; do
         if [[ "$METRIC" == "open_interest" ]]; then
-          BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=1000"
+          # Limit nun 500 statt 1000, um code:-1130 zu vermeiden
+          BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=500"
         else
           BIN_URL="https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000"
         fi
@@ -60,10 +61,10 @@ case "$METRIC" in
         EURL=$(urlencode "$BIN_URL")
         echo "→ Downloading ${METRIC} ${sym} @ ${cur}"
         curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
-          > "${TARGET}/${sym}_${cur}.json" \
-          || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "${TARGET}/${sym}_${cur}.json"; }
+          > "metrics/${PART}/${METRIC}/${sym}_${cur}.json" \
+          || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "metrics/${PART}/${METRIC}/${sym}_${cur}.json"; }
 
-        # kürzeres Sleep
+        # reduziertes Sleep
         sleep 0.05
       done
 
@@ -103,7 +104,7 @@ case "$METRIC" in
             spread,
             bid_depth,
             ask_depth
-          }' > "${TARGET}/${sym}_${cur}.json"
+          }' > "metrics/${PART}/${METRIC}/${sym}_${cur}.json"
 
         sleep 0.05
       done
