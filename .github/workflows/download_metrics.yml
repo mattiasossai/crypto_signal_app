@@ -1,4 +1,4 @@
-name: Download 4yr Metrics via Proxy (parallel)
+name: Download 4yr Metrics via Proxy (serial)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 36
+      max-parallel: 1   # << serial statt parallel
 
     env:
       PROXY_URL: https://cryptosignalapp-production.up.railway.app
@@ -21,8 +21,7 @@ jobs:
       GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
-      - name: Checkout mit Schreibrechten
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
           persist-credentials: true
@@ -33,12 +32,9 @@ jobs:
           mkdir -p metrics/${{ matrix.part }}/${{ matrix.metric }}
 
       - name: jq installieren
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Metrics herunterladen
-        shell: bash
         run: |
           if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"; END="2022-12-31"
@@ -55,8 +51,7 @@ jobs:
               "${{ matrix.part }}" \
               "${{ matrix.symbol }}"
 
-      - name: Änderungen committen & pushen (robust)
-        shell: bash
+      - name: Commit & Push (robust)
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
@@ -70,5 +65,5 @@ jobs:
             git commit -m "chore(metrics): full re-download ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine neuen Dateien für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
+            echo "🚀 Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
           fi
