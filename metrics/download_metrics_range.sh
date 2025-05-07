@@ -21,15 +21,15 @@ fi
 
 : "${PROXY_URL:?Please set PROXY_URL in env!}"
 
-# Zielverzeichnis für diesen Job (je ein Symbol)
+# Zielverzeichnis für den aktuellen Symbol-Job
 TARGET="metrics/${PART}/${METRIC}/${SYMBOLS[0]}"
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
-# Hilfsfunktion: YYYY-MM-DD → ms
+# Hilfsfunktion: YYYY-MM-DD → Millisekunden
 to_ms(){ date -d "$1" +%s000; }
 
-# Bash-URL-Encoder
+# Bash-basierter URL-Encoder
 urlencode() {
   local s="$1" enc="" i c o
   for (( i=0; i<${#s}; i++ )); do
@@ -52,7 +52,7 @@ case "$METRIC" in
 
       for sym in "${SYMBOLS[@]}"; do
         if [[ "$METRIC" == "open_interest" ]]; then
-          # Limit nun 500 statt 1000, um code:-1130 zu vermeiden
+          # Limit auf 500 gesetzt, um code:-1130 zu vermeiden
           BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=500"
         else
           BIN_URL="https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000"
@@ -61,10 +61,9 @@ case "$METRIC" in
         EURL=$(urlencode "$BIN_URL")
         echo "→ Downloading ${METRIC} ${sym} @ ${cur}"
         curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
-          > "metrics/${PART}/${METRIC}/${sym}_${cur}.json" \
-          || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "metrics/${PART}/${METRIC}/${sym}_${cur}.json"; }
+          > "${TARGET}/${sym}_${cur}.json" \
+          || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "${TARGET}/${sym}_${cur}.json"; }
 
-        # reduziertes Sleep
         sleep 0.05
       done
 
@@ -104,7 +103,7 @@ case "$METRIC" in
             spread,
             bid_depth,
             ask_depth
-          }' > "metrics/${PART}/${METRIC}/${sym}_${cur}.json"
+          }' > "${TARGET}/${sym}_${cur}.json"
 
         sleep 0.05
       done
