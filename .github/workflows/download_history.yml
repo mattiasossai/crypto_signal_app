@@ -1,71 +1,59 @@
-name: 📥 Download Candlestick History
+name: 📥 Download Rolling History (last 30d)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
-    name: 🔄 ${{ matrix.symbol }} ｜ ${{ matrix.interval }}
+  download_history:
+    name: History | ${{ matrix.symbol }} | ${{ matrix.interval }}
     runs-on: ubuntu-latest
 
     strategy:
-      max-parallel: 1
       matrix:
-        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
-        interval: [1m, 5m, 15m, 1h, 4h]
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, ADAUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+        interval: [1m,5m,15m,1h,4h]
+      # alle Kombinationen laufen parallel
+
+    env:
+      GIT_USER: github-actions[bot]
+      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
-      - name: 🔀 Checkout full history
+      - name: Checkout mit Schreibrechten
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: ⚙️ Configure Git user
+      - name: Tools installieren
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
 
-      - name: 🔧 Make script executable
-        run: chmod +x train/download_data_range.sh
-
-      - name: 📅 Calculate rolling 30-day window
-        id: dates
+      - name: History herunterladen
+        shell: bash
         run: |
-          END=$(date -I -d "yesterday")
-          START=$(date -I -d "$END - 30 days")
-          echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END"     >> $GITHUB_OUTPUT
+          chmod +x historical/download_history_range.sh
 
-      - name: 🌐 Download 30d rolling for ${{ matrix.symbol }} / ${{ matrix.interval }}
-        run: |
-          OUT=historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
-          mkdir -p "$OUT"
-          ./train/download_data_range.sh \
+          # Script-Aufruf: symbol interval
+          historical/download_history_range.sh \
             "${{ matrix.symbol }}" \
-            "${{ matrix.interval }}" \
-            "${{ steps.dates.outputs.start }}" \
-            "${{ steps.dates.outputs.end }}" \
-            "$OUT"
+            "${{ matrix.interval }}"
 
-      - name: 📂 Unzip & cleanup
+      - name: Neue Dateien committen & pushen
+        shell: bash
         run: |
-          DIR=historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
-          for z in "$DIR"/*.zip; do
-            unzip -o -q "$z" -d "$DIR"
-          done
-          rm -f "$DIR"/*.zip
+          git config user.name "${GIT_USER}"
+          git config user.email "${GIT_EMAIL}"
 
-      - name: 🔄 Commit & Push CSVs
-        run: |
-          git stash push --include-untracked -m "pre-pull stash"
-          git pull --rebase origin main
-          git stash pop
+          # Stage nur den Ordner für dieses Symbol/Intervall
+          git add historical/${{ matrix.symbol }}/${{ matrix.interval }}
 
-          git add -A historical/${{ matrix.symbol }}/${{ matrix.interval }}/rolling
-
-          if ! git diff --cached --quiet; then
-            git commit -m "feat(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} up to $(date -I) [skip ci]"
+          # Nur committen, wenn es tatsächliche Änderungen gibt
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git pull --rebase --autostash origin main
+            git commit -m "chore(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "→ No new CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }}"
+            echo "Keine neuen Dateien für ${{ matrix.symbol }} ${{ matrix.interval }}"
           fi
