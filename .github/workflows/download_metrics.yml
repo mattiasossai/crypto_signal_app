@@ -1,4 +1,3 @@
-# .github/workflows/download_metrics.yml
 name: Download & Commit Metrics via Proxy
 
 on:
@@ -54,7 +53,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
-          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
+          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}/*.json
+          if-no-files-found: ignore
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 2. Aggregator & Commit (Fan-In): zieht alle Artifacts, merged sie ins Repo und pusht
@@ -83,16 +83,12 @@ jobs:
 
       - name: Clean old metrics folders
         run: |
-          # Löscht alle bisherigen metrics/part*/<metric> Verzeichnisse für einen Full-Refresh
           rm -rf metrics/part1 metrics/part2
           mkdir -p metrics/part1 metrics/part2
 
       - name: Copy artifacts into metrics/
         run: |
-          # Für jede JSON im Artifact-Ordner den korrekten Zielpfad bilden und verschieben
           find metrics-artifacts -type f -name '*.json' | while read src; do
-            # metrics-artifacts/part2/open_interest/BNBUSDT_2025-05-06.json
-            # → Ziel: metrics/part2/open_interest/BNBUSDT_2025-05-06.json
             rel="${src#metrics-artifacts/}"
             dst="metrics/${rel}"
             mkdir -p "$(dirname "$dst")"
@@ -104,13 +100,9 @@ jobs:
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
-
-          # Fetch latest main and reset index to avoid conflicts
           git fetch origin main
           git reset --mixed origin/main
-
           git add metrics
-
           if ! git diff --cached --quiet; then
             git commit -m "chore(metrics): full re-download [skip ci]"
             git push origin HEAD:main
