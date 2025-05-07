@@ -5,6 +5,8 @@ on:
 
 jobs:
   download_metrics:
+    # Job-Name zeigt Matrix-Kombination in der Actions‐UI an
+    name: Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -59,10 +61,10 @@ jobs:
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Stage nur das eine Symbol
+          # Stage nur das eine Symbol-Verzeichnis
           git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}
 
-          # Wenn Änderungen vorhanden, rebasen, committen und pushen
+          # Wenn Änderungen vorhanden, pull+rebase, commit und push
           if [[ -n "$(git status --porcelain)" ]]; then
             git pull --rebase --autostash origin main
             git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
