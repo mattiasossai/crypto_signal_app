@@ -23,7 +23,7 @@ TARGET="metrics/${PART}/${METRIC}/${SYMBOLS[0]}"
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
-to_ms(){ date -d "$1" +%s000; }
+to_ms() { date -d "$1" +%s000; }
 
 urlencode() {
   local s="$1" enc="" i c o
@@ -53,9 +53,12 @@ if [[ "$METRIC" == "open_interest" || "$METRIC" == "funding_rate" ]]; then
 
       EURL=$(urlencode "$BIN_URL")
       echo "→ Downloading ${METRIC} ${sym} @ ${cur}"
-      curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
-        > "${TARGET}/${sym}_${cur}.json" \
-        || { echo "⚠️ Error ${sym} ${cur}, writing empty"; echo '{}' > "${TARGET}/${sym}_${cur}.json"; }
+      if curl -sSf "${PROXY_URL}/proxy?url=${EURL}" > "${TARGET}/${sym}_${cur}.json"; then
+        :
+      else
+        echo "⚠️ API-Error für ${sym} @ ${cur}, schreibe leere Datei"
+        echo '{}' > "${TARGET}/${sym}_${cur}.json"
+      fi
 
       sleep 0.05
     done
@@ -71,26 +74,30 @@ elif [[ "$METRIC" == "liquidity" ]]; then
       EURL=$(urlencode "$BIN_URL")
       echo "→ Downloading liquidity ${sym} @ ${cur}"
 
+      # Rohdaten ziehen oder leeres Array-Objekt
       raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}") || raw='{"bids":[],"asks":[]}'
 
-      # null/leer prüfen
-      if [[ -z "$raw" ]] || [[ "$raw" == "null" ]]; then
-        echo "⚠️ Liquidity empty/blocked for ${sym} @ ${cur}"
+      # valid JSON mit bids/asks?
+      if ! echo "$raw" | jq -e 'has("bids") and has("asks")' >/dev/null; then
+        echo "⚠️ Ungültige Liquidity-Antwort für ${sym} @ ${cur}, überspringe"
         continue
       fi
 
-      # sichere Arrays
-      bids=$(jq -e '.bids // []' <<<"$raw")
-      asks=$(jq -e '.asks // []' <<<"$raw")
+      # Default-Arrays, falls null
+      bids=$(echo "$raw" | jq '.bids // []')
+      asks=$(echo "$raw" | jq '.asks // []')
 
-      bid0=$(jq 'if ($bids|length)>0 then $bids[0][0]|tonumber else 0 end' --argjson bids "$bids" <<<"$raw")
-      ask0=$(jq 'if ($asks|length)>0 then $asks[0][0]|tonumber else 0 end' --argjson asks "$asks" <<<"$raw")
+      # erster Bid/Ask
+      bid0=$(echo "$bids"   | jq 'if length>0 then .[0][0] | tonumber else 0 end')
+      ask0=$(echo "$asks"   | jq 'if length>0 then .[0][0] | tonumber else 0 end')
 
+      # weitere Kennzahlen
       mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
       spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
-      bid_depth=$(jq '[ .bids[][1]|tonumber ] | add' <<<"$raw")
-      ask_depth=$(jq '[ .asks[][1]|tonumber ] | add' <<<"$raw")
+      bid_depth=$(echo "$bids" | jq '[ .[][1] | tonumber ] | add')
+      ask_depth=$(echo "$asks" | jq '[ .[][1] | tonumber ] | add')
 
+      # schreiben
       jq -n \
         --arg symbol "$sym" \
         --arg date   "$cur" \
@@ -109,6 +116,7 @@ elif [[ "$METRIC" == "liquidity" ]]; then
 
       sleep 0.05
     done
+
     cur=$(date -I -d "$cur +1 day")
   done
 
