@@ -5,6 +5,7 @@ on:
 
 jobs:
   download_metrics:
+    # Job-Name zeigt Matrix-Kombination in der Actions-UI an
     name: Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
 
@@ -13,6 +14,7 @@ jobs:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+      max-parallel: 36  # alle Kombinationen parallel
 
     env:
       PROXY_URL: https://crypto-signal-app.onrender.com
@@ -52,20 +54,23 @@ jobs:
             "${{ matrix.part }}" \
             "${{ matrix.symbol }}"
 
-      - name: Änderungen committen und pushen
+      - name: Änderungen committen und pushen (robust)
         shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Füge alle neuen/geänderten JSONs für dieses Symbol ein
+          # Stelle sicher, dass wir auf dem neuesten Remote-Stand basieren
+          git fetch origin main
+          git reset --mixed origin/main
+
+          # Stage alle neuen oder geänderten JSONs für dieses Symbol/Metric/Part
           git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
 
-          # Prüfen, ob Dateien zum Commit stehen
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git pull --rebase --autostash origin main
+          # Commit & Push nur, wenn es Änderungen gibt
+          if ! git diff --cached --quiet; then
             git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
+            echo "🚀 Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
           fi
