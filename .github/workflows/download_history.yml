@@ -10,9 +10,9 @@ jobs:
 
     strategy:
       matrix:
-        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, ADAUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
         interval: [1m,5m,15m,1h,4h]
-      # alle Kombinationen laufen parallel
+      max-parallel: 24  # 6 Symbole × 4 Intervalle
 
     env:
       GIT_USER: github-actions[bot]
@@ -34,29 +34,26 @@ jobs:
         shell: bash
         run: |
           chmod +x historical/download_history_range.sh
-
-          # Aufruf: symbol interval
           historical/download_history_range.sh \
             "${{ matrix.symbol }}" \
             "${{ matrix.interval }}"
 
-      - name: Änderungen committen und pushen (robust)
+      - name: Änderungen committen & pushen (robust)
         shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Aktuellsten Remote-Stand holen und HEAD darauf resetten
+          # Auf neuesten Remote-Stand setzen, lokale CSVs bleiben erhalten
           git fetch origin main
           git reset --mixed origin/main
 
-          # Stage alle neuen oder geänderten CSVs für dieses Symbol/Intervall
+          # Stage alle neuen/geänderten CSVs unter historical/
           git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/*.csv
 
-          # Wenn es Änderungen gibt, committen & pushen
           if ! git diff --cached --quiet; then
             git commit -m "chore(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine neuen Dateien für ${{ matrix.symbol }}/$({{ matrix.interval }})"
+            echo "🚀 Keine neuen Dateien für ${{ matrix.symbol }}/${{ matrix.interval }}"
           fi
