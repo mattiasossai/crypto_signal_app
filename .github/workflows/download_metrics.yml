@@ -14,14 +14,16 @@ jobs:
       max-parallel: 1
 
     env:
-      # Deine Render-Proxy-URL
       PROXY_URL: https://crypto-signal-app.onrender.com
+      GIT_COMMITTER_NAME: github-actions[bot]
+      GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repo (with write permissions)
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Install dependencies
         run: |
@@ -31,7 +33,6 @@ jobs:
       - name: Download metrics via proxy
         shell: bash
         run: |
-          # Errechne START/END je nach part1/part2
           if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"
             END="2022-12-31"
@@ -47,3 +48,20 @@ jobs:
               "$START" \
               "$END" \
               "${{ matrix.part }}"
+
+      - name: Commit and push updated JSONs
+        run: |
+          # Konfiguriere Git
+          git config user.name "${GIT_COMMITTER_NAME}"
+          git config user.email "${GIT_COMMITTER_EMAIL}"
+
+          # Stage nur die geänderten Dateien im metrics-Ordner
+          git add metrics/${{ matrix.part }}/${{ matrix.metric }}
+
+          # Wenn es Änderungen gibt, commit und push
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(metrics): update ${{ matrix.metric }} ${{ matrix.part }} [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "Keine Änderungen in metrics/${{ matrix.part }}/${{ matrix.metric }}"
+          fi
