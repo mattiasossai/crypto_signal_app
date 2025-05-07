@@ -12,7 +12,7 @@ START="$2"     # YYYY-MM-DD
 END="$3"       # YYYY-MM-DD (exclusive)
 PART="$4"      # part1 | part2
 
-: "${WORKER_URL:?Please set WORKER_URL in env!}"
+: "${PROXY_URL:?Please set PROXY_URL in env!}"
 
 TARGET="metrics/${PART}/${METRIC}"
 rm -rf "$TARGET"
@@ -23,59 +23,85 @@ SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
 # helper: YYYY-MM-DD → ms
 to_ms(){ date -d "$1" +%s000; }
 
+# URL-Encoder (Bash-only)
+urlencode() {
+  local s="$1"
+  local enc=""
+  local i o c
+  for (( i=0; i<${#s}; i++ )); do
+    c=${s:i:1}
+    case "$c" in
+      [a-zA-Z0-9.~_-]) o="$c" ;;
+      *) printf -v o '%%%02X' "'$c" ;;
+    esac
+    enc+="$o"
+  done
+  echo "$enc"
+}
+
 if [[ "$METRIC" == "open_interest" ]]; then
-  # tägliche 1d-Windows
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     nxt=$(date -I -d "$cur +1 day")
     s=$(to_ms "$cur") e=$(to_ms "$nxt")
     for sym in "${SYMBOLS[@]}"; do
-      curl -s "${WORKER_URL}/open-interest?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}" \
-        > "${TARGET}/${sym}_${cur}.json"
+      # Direkter Binance-Endpoint für historische Open Interest
+      BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=1000"
+      EURL=$(urlencode "$BIN_URL")
+      echo "→ Downloading OpenInterest ${sym} @ ${cur}"
+      curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
+        > "${TARGET}/${sym}_${cur}.json" \
+        || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "${TARGET}/${sym}_${cur}.json"; }
       sleep 0.1
     done
     cur="$nxt"
   done
 
 elif [[ "$METRIC" == "funding_rate" ]]; then
-  # 1 Request/Tag mit limit=1000 (max. 3 Events → kein 1027)
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     nxt=$(date -I -d "$cur +1 day")
     s=$(to_ms "$cur") e=$(to_ms "$nxt")
     for sym in "${SYMBOLS[@]}"; do
-      curl -s "${WORKER_URL}/funding-rate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000" \
-        > "${TARGET}/${sym}_${cur}.json"
+      # Binance-Funding-Rate-Endpoint
+      BIN_URL="https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000"
+      EURL=$(urlencode "$BIN_URL")
+      echo "→ Downloading FundingRate ${sym} @ ${cur}"
+      curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
+        > "${TARGET}/${sym}_${cur}.json" \
+        || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "${TARGET}/${sym}_${cur}.json"; }
       sleep 0.1
     done
     cur="$nxt"
   done
 
 elif [[ "$METRIC" == "liquidity" ]]; then
-  # 1 Snapshot/Tag → berechnete Kennzahlen statt Roh-Blob
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     for sym in "${SYMBOLS[@]}"; do
-      raw=$(curl -s "${WORKER_URL}/liquidity?symbol=${sym}&limit=100")
+      # Roh-Orderbook
+      BIN_URL="https://api.binance.com/api/v3/depth?symbol=${sym}&limit=100"
+      EURL=$(urlencode "$BIN_URL")
+      echo "→ Downloading OrderBook ${sym} @ ${cur}"
+      raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}" ) \
+        || { echo "⚠️ Fehler bei ${sym} ${cur}, fallback leer"; raw='{"bids":[],"asks":[]}' ; }
 
-      # Best Bid/Ask
-      bid0=$(jq '(.bids[0][0] | tonumber)'  <<<"$raw")
-      ask0=$(jq '(.asks[0][0] | tonumber)'  <<<"$raw")
+      # Berechne Mid, Spread, Depth
+      bid0=$(jq '(.bids[0][0] // 0) | tonumber'  <<<"$raw")
+      ask0=$(jq '(.asks[0][0] // 0) | tonumber'  <<<"$raw")
       mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
       spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
-
-      # Depth‐Summen
       bid_depth=$(jq '[ .bids[][1]|tonumber ] | add' <<<"$raw")
       ask_depth=$(jq '[ .asks[][1]|tonumber ] | add' <<<"$raw")
 
-      # Ausgeben
+      # Ergebnis-JSON
       jq -n \
         --arg symbol "$sym" \
-        --arg date   "$cur" \
-        --argjson mid         "$mid" \
-        --argjson spread      "$spread" \
-        --argjson bid_depth   "$bid_depth" \
-        --argjson ask_depth   "$ask_depth" \
+        --arg date "$cur" \
+        --argjson mid       "$mid" \
+        --argjson spread    "$spread" \
+        --argjson bid_depth "$bid_depth" \
+        --argjson ask_depth "$ask_depth" \
         '{
           symbol:    $symbol,
           date:      $date,
