@@ -74,30 +74,25 @@ elif [[ "$METRIC" == "liquidity" ]]; then
       EURL=$(urlencode "$BIN_URL")
       echo "→ Downloading liquidity ${sym} @ ${cur}"
 
-      # Rohdaten ziehen oder leeres Array-Objekt
       raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}") || raw='{"bids":[],"asks":[]}'
 
-      # valid JSON mit bids/asks?
+      # Prüfen, ob raw gültige bids/asks enthält
       if ! echo "$raw" | jq -e 'has("bids") and has("asks")' >/dev/null; then
         echo "⚠️ Ungültige Liquidity-Antwort für ${sym} @ ${cur}, überspringe"
         continue
       fi
 
-      # Default-Arrays, falls null
       bids=$(echo "$raw" | jq '.bids // []')
       asks=$(echo "$raw" | jq '.asks // []')
 
-      # erster Bid/Ask
-      bid0=$(echo "$bids"   | jq 'if length>0 then .[0][0] | tonumber else 0 end')
-      ask0=$(echo "$asks"   | jq 'if length>0 then .[0][0] | tonumber else 0 end')
+      bid0=$(echo "$bids" | jq 'if length>0 then .[0][0]|tonumber else 0 end')
+      ask0=$(echo "$asks" | jq 'if length>0 then .[0][0]|tonumber else 0 end')
 
-      # weitere Kennzahlen
       mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
       spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
-      bid_depth=$(echo "$bids" | jq '[ .[][1] | tonumber ] | add')
-      ask_depth=$(echo "$asks" | jq '[ .[][1] | tonumber ] | add')
+      bid_depth=$(echo "$bids" | jq '[.[].[1]|tonumber] | add')
+      ask_depth=$(echo "$asks" | jq '[.[].[1]|tonumber] | add')
 
-      # schreiben
       jq -n \
         --arg symbol "$sym" \
         --arg date   "$cur" \
