@@ -76,7 +76,6 @@ elif [[ "$METRIC" == "liquidity" ]]; then
 
       raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}") || raw='{"bids":[],"asks":[]}'
 
-      # Prüfen, ob raw gültige bids/asks enthält
       if ! echo "$raw" | jq -e 'has("bids") and has("asks")' >/dev/null; then
         echo "⚠️ Ungültige Liquidity-Antwort für ${sym} @ ${cur}, überspringe"
         continue
