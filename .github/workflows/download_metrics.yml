@@ -16,7 +16,6 @@ jobs:
       max-parallel: 36
 
     env:
-      # Dein Railway-Proxy:
       PROXY_URL: https://cryptosignalapp-production.up.railway.app
       GIT_USER: github-actions[bot]
       GIT_EMAIL: github-actions[bot]@users.noreply.github.com
@@ -28,6 +27,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Alte Metrics löschen (Clean-Start)
+        run: |
+          rm -rf metrics/${{ matrix.part }}/${{ matrix.metric }}
+          mkdir -p metrics/${{ matrix.part }}/${{ matrix.metric }}
+
       - name: jq installieren
         run: |
           sudo apt-get update
@@ -36,7 +40,6 @@ jobs:
       - name: Metrics herunterladen
         shell: bash
         run: |
-          # Zeitraum für part1 vs. part2 festlegen
           if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"; END="2022-12-31"
           else
@@ -58,17 +61,14 @@ jobs:
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Remote-Stand frisch holen
           git fetch origin main
-          # Setze Arbeitskopie & Index auf origin/main (eigene JSONs bleiben erhalten)
           git reset --mixed origin/main
 
-          # Stage alle JSONs für dieses Symbol/Metric/Part
           git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
 
           if ! git diff --cached --quiet; then
-            git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
+            git commit -m "chore(metrics): full re-download ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
+            echo "🚀 Keine neuen Dateien für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
           fi
