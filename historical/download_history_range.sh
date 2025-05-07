@@ -1,47 +1,118 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# args: SYMBOL INTERVAL
-if [ $# -ne 2 ]; then
-  echo "Usage: $0 SYMBOL INTERVAL"
+# args: METRIC START_DATE END_DATE PART_NAME [SYMBOL]
+if [ $# -lt 4 ] || [ $# -gt 5 ]; then
+  echo "Usage: $0 METRIC START_DATE END_DATE PART_NAME [SYMBOL]"
   exit 1
 fi
 
-SYMBOL="$1"      # z.B. BTCUSDT
-INTERVAL="$2"    # z.B. 5m, 1h, 1d
+METRIC="$1"    # open_interest | funding_rate | liquidity
+START="$2"     # YYYY-MM-DD
+END="$3"       # YYYY-MM-DD (exclusive)
+PART="$4"      # part1 | part2
 
-# Zeitfenster: letzter 30 Tage bis gestern
-START=$(date -I -d "30 days ago")
-END=$(date -I -d "yesterday")
+# Optional: nur ein Symbol, wenn 5. Argument gesetzt
+if [ $# -eq 5 ]; then
+  SYMBOLS=("$5")
+else
+  SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
+fi
 
-BASE_URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}"
-TARGET_DIR="historical/${SYMBOL}/${INTERVAL}"
-mkdir -p "${TARGET_DIR}"
+: "${PROXY_URL:?Please set PROXY_URL in env!}"
 
-cur="${START}"
-while [[ "${cur}" < "${END}" ]]; do
-  FILENAME="${SYMBOL}-${INTERVAL}-${cur}.csv"
-  FILEPATH="${TARGET_DIR}/${FILENAME}"
+# Zielverzeichnis für den aktuellen Symbol-Job
+TARGET="metrics/${PART}/${METRIC}/${SYMBOLS[0]}"
+rm -rf "$TARGET"
+mkdir -p "$TARGET"
 
-  if [[ -f "${FILEPATH}" ]]; then
-    echo "→ Skipping existing ${FILEPATH}"
-  else
-    ZIPNAME="${SYMBOL}-${INTERVAL}-${cur}.zip"
-    URL="${BASE_URL}/${ZIPNAME}"
-    echo "→ Downloading ${ZIPNAME} → ${FILENAME}"
+# Hilfsfunktion: YYYY-MM-DD → Millisekunden
+to_ms(){ date -d "$1" +%s000; }
 
-    # temporär ins /tmp-Verzeichnis laden und entpacken
-    mkdir -p /tmp/cli_hist && cd /tmp/cli_hist
-    if curl -sSfL "${URL}" -o "${ZIPNAME}"; then
-      unzip -p "${ZIPNAME}" > "${GITHUB_WORKSPACE}/${FILEPATH}"
-      echo "   ✓ Saved ${FILEPATH}"
-    else
-      echo "   ⚠️ Datei nicht gefunden: ${URL}"
-    fi
-    cd - >/dev/null
-    rm -rf /tmp/cli_hist
-  fi
+# Bash-basierter URL-Encoder
+urlencode() {
+  local s="$1" enc="" i c o
+  for (( i=0; i<${#s}; i++ )); do
+    c=${s:i:1}
+    case "$c" in
+      [a-zA-Z0-9.~_-]) o="$c" ;;
+      *) printf -v o '%%%02X' "'$c" ;;
+    esac
+    enc+="$o"
+  done
+  echo "$enc"
+}
 
-  # nächsten Tag
-  cur=$(date -I -d "${cur} +1 day")
-done
+case "$METRIC" in
+  open_interest|funding_rate)
+    cur="$START"
+    while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
+      nxt=$(date -I -d "$cur +1 day")
+      s=$(to_ms "$cur") e=$(to_ms "$nxt")
+
+      for sym in "${SYMBOLS[@]}"; do
+        if [[ "$METRIC" == "open_interest" ]]; then
+          # Limit auf 500 gesetzt, um code:-1130 zu vermeiden
+          BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=500"
+        else
+          BIN_URL="https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000"
+        fi
+
+        EURL=$(urlencode "$BIN_URL")
+        echo "→ Downloading ${METRIC} ${sym} @ ${cur}"
+        curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
+          > "${TARGET}/${sym}_${cur}.json" \
+          || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; echo '{}' > "${TARGET}/${sym}_${cur}.json"; }
+
+        sleep 0.05
+      done
+
+      cur="$nxt"
+    done
+    ;;
+
+  liquidity)
+    cur="$START"
+    while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
+      for sym in "${SYMBOLS[@]}"; do
+        BIN_URL="https://api.binance.com/api/v3/depth?symbol=${sym}&limit=100"
+        EURL=$(urlencode "$BIN_URL")
+        echo "→ Downloading liquidity ${sym} @ ${cur}"
+
+        raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}") \
+          || { echo "⚠️ Fehler bei ${sym} ${cur}, fallback leer"; raw='{"bids":[],"asks":[]}' ; }
+
+        bid0=$(jq '(.bids[0][0] // 0) | tonumber'  <<<"$raw")
+        ask0=$(jq '(.asks[0][0] // 0) | tonumber'  <<<"$raw")
+        mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
+        spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
+        bid_depth=$(jq '[ .bids[][1]|tonumber ] | add' <<<"$raw")
+        ask_depth=$(jq '[ .asks[][1]|tonumber ] | add' <<<"$raw")
+
+        jq -n \
+          --arg symbol "$sym" \
+          --arg date   "$cur" \
+          --argjson mid       "$mid" \
+          --argjson spread    "$spread" \
+          --argjson bid_depth "$bid_depth" \
+          --argjson ask_depth "$ask_depth" \
+          '{
+            symbol:    $symbol,
+            date:      $date,
+            mid,
+            spread,
+            bid_depth,
+            ask_depth
+          }' > "${TARGET}/${sym}_${cur}.json"
+
+        sleep 0.05
+      done
+
+      cur=$(date -I -d "$cur +1 day")
+    done
+    ;;
+  *)
+    echo "Unknown metric: $METRIC"
+    exit 1
+    ;;
+esac
