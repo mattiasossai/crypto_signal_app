@@ -36,11 +36,9 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.part }}" == "part1" ]]; then
-            START="2020-01-01"
-            END="2022-12-31"
+            START="2020-01-01"; END="2022-12-31"
           else
-            START="2023-01-01"
-            END=$(date -I -d "yesterday")
+            START="2023-01-01"; END=$(date -I -d "yesterday")
           fi
 
           chmod +x metrics/download_metrics_range.sh
