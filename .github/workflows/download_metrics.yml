@@ -1,12 +1,17 @@
+# .github/workflows/download_metrics.yml
 name: Download & Commit Metrics via Proxy
 
 on:
   workflow_dispatch:
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. Download-Matrix (Fan-Out): lädt alle JSONs parallel und speichert sie als Artifact
+  # ─────────────────────────────────────────────────────────────────────────────
   download_matrix:
-    name: 🔄 Download Matrix
+    name: 🔄 Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
@@ -18,30 +23,44 @@ jobs:
       PROXY_URL: https://cryptosignalapp-production.up.railway.app
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: jq installieren
+      - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Download JSONs
+      - name: Download JSONs via Proxy
+        shell: bash
         run: |
           chmod +x metrics/download_metrics_range.sh
+
+          if [[ "${{ matrix.part }}" == "part1" ]]; then
+            START="2020-01-01"
+            END="2022-12-31"
+          else
+            START="2023-01-01"
+            END=$(date -I -d "yesterday")
+          fi
+
           PROXY_URL="$PROXY_URL" \
             metrics/download_metrics_range.sh \
-              ${{ matrix.metric }} \
-              $( [ ${{ matrix.part }} == 'part1' ] && echo 2020-01-01 ) \
-              $( [ ${{ matrix.part }} == 'part1' ] && echo 2022-12-31 ) \
-              ${{ matrix.part }} \
-              ${{ matrix.symbol }}
+              "${{ matrix.metric }}" \
+              "$START" \
+              "$END" \
+              "${{ matrix.part }}" \
+              "${{ matrix.symbol }}"
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+      - name: Upload JSON-Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
           path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. Aggregator & Commit (Fan-In): zieht alle Artifacts, merged sie ins Repo und pusht
+  # ─────────────────────────────────────────────────────────────────────────────
   aggregate_and_push:
-    name: 📦 Aggregate & Push
+    name: 📦 Aggregate & Push Metrics
     runs-on: ubuntu-latest
     needs: download_matrix
     if: needs.download_matrix.result == 'success'
@@ -57,27 +76,41 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Download all artifacts
+      - name: Download all metric-artifacts
         uses: actions/download-artifact@v3
         with:
-          # lädt alle artifacts im workspace unter ./metrics-artifacts
           path: ./metrics-artifacts
 
-      - name: Copy into metrics/…  
+      - name: Clean old metrics folders
         run: |
-          # kopiert jede JSON aus den artifacts ins Ziel-Repo
-          find metrics-artifacts -name '*.json' | while read src; do
-            # erzeuge Zielordner
-            dst="metrics/$(echo "$src" | cut -d/ -f2-)"
+          # Löscht alle bisherigen metrics/part*/<metric> Verzeichnisse für einen Full-Refresh
+          rm -rf metrics/part1 metrics/part2
+          mkdir -p metrics/part1 metrics/part2
+
+      - name: Copy artifacts into metrics/
+        run: |
+          # Für jede JSON im Artifact-Ordner den korrekten Zielpfad bilden und verschieben
+          find metrics-artifacts -type f -name '*.json' | while read src; do
+            # metrics-artifacts/part2/open_interest/BNBUSDT_2025-05-06.json
+            # → Ziel: metrics/part2/open_interest/BNBUSDT_2025-05-06.json
+            rel="${src#metrics-artifacts/}"
+            dst="metrics/${rel}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
           done
 
-      - name: Commit & Push
+      - name: Commit & Push all Metrics
+        shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
+
+          # Fetch latest main and reset index to avoid conflicts
+          git fetch origin main
+          git reset --mixed origin/main
+
           git add metrics
+
           if ! git diff --cached --quiet; then
             git commit -m "chore(metrics): full re-download [skip ci]"
             git push origin HEAD:main
