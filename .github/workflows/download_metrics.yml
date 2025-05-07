@@ -1,69 +1,86 @@
-name: Download 4yr Metrics via Proxy (serial)
+name: Download & Commit Metrics via Proxy
 
 on:
   workflow_dispatch:
 
 jobs:
-  download_metrics:
-    name: Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
+  download_matrix:
+    name: 🔄 Download Matrix
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 1   # << serial statt parallel
+      max-parallel: 36
 
     env:
       PROXY_URL: https://cryptosignalapp-production.up.railway.app
-      GIT_USER: github-actions[bot]
-      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
       - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Alte Metrics löschen (Clean-Start)
-        run: |
-          rm -rf metrics/${{ matrix.part }}/${{ matrix.metric }}
-          mkdir -p metrics/${{ matrix.part }}/${{ matrix.metric }}
 
       - name: jq installieren
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Metrics herunterladen
+      - name: Download JSONs
         run: |
-          if [[ "${{ matrix.part }}" == "part1" ]]; then
-            START="2020-01-01"; END="2022-12-31"
-          else
-            START="2023-01-01"; END=$(date -I -d "yesterday")
-          fi
-
           chmod +x metrics/download_metrics_range.sh
-          PROXY_URL="${PROXY_URL}" \
+          PROXY_URL="$PROXY_URL" \
             metrics/download_metrics_range.sh \
-              "${{ matrix.metric }}" \
-              "$START" \
-              "$END" \
-              "${{ matrix.part }}" \
-              "${{ matrix.symbol }}"
+              ${{ matrix.metric }} \
+              $( [ ${{ matrix.part }} == 'part1' ] && echo 2020-01-01 ) \
+              $( [ ${{ matrix.part }} == 'part1' ] && echo 2022-12-31 ) \
+              ${{ matrix.part }} \
+              ${{ matrix.symbol }}
 
-      - name: Commit & Push (robust)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
+          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
+
+  aggregate_and_push:
+    name: 📦 Aggregate & Push
+    runs-on: ubuntu-latest
+    needs: download_matrix
+    if: needs.download_matrix.result == 'success'
+
+    env:
+      GIT_USER: github-actions[bot]
+      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
+
+    steps:
+      - name: Checkout fresh
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          # lädt alle artifacts im workspace unter ./metrics-artifacts
+          path: ./metrics-artifacts
+
+      - name: Copy into metrics/…  
+        run: |
+          # kopiert jede JSON aus den artifacts ins Ziel-Repo
+          find metrics-artifacts -name '*.json' | while read src; do
+            # erzeuge Zielordner
+            dst="metrics/$(echo "$src" | cut -d/ -f2-)"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
+          done
+
+      - name: Commit & Push
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
-
-          git fetch origin main
-          git reset --mixed origin/main
-
-          git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
-
+          git add metrics
           if ! git diff --cached --quiet; then
-            git commit -m "chore(metrics): full re-download ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
+            git commit -m "chore(metrics): full re-download [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
+            echo "🚀 Keine Änderungen nach Full-Download"
           fi
