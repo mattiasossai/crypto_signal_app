@@ -1,4 +1,4 @@
-name: Download 4yr Metrics via Proxy
+name: Download 4yr Metrics via Proxy (parallel)
 
 on:
   workflow_dispatch:
@@ -10,29 +10,31 @@ jobs:
     strategy:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
-        part: [part1, part2]
-      max-parallel: 1
+        part:   [part1, part2]
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+      # alle Kombinationen laufen parallel
 
     env:
       PROXY_URL: https://crypto-signal-app.onrender.com
-      GIT_COMMITTER_NAME: github-actions[bot]
-      GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+      GIT_USER: github-actions[bot]
+      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
-      - name: Checkout repo (with write permissions)
+      - name: Checkout mit Schreibrechten
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Install dependencies
+      - name: jq installieren
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Download metrics via proxy
+      - name: Metrics herunterladen
         shell: bash
         run: |
+          # Part-Definition
           if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"
             END="2022-12-31"
@@ -42,26 +44,29 @@ jobs:
           fi
 
           chmod +x metrics/download_metrics_range.sh
+
           PROXY_URL="${PROXY_URL}" \
-            metrics/download_metrics_range.sh \
-              "${{ matrix.metric }}" \
-              "$START" \
-              "$END" \
-              "${{ matrix.part }}"
+          metrics/download_metrics_range.sh \
+            "${{ matrix.metric }}" \
+            "$START" \
+            "$END" \
+            "${{ matrix.part }}" \
+            "${{ matrix.symbol }}"
 
-      - name: Commit and push updated JSONs
+      - name: Änderungen committen und pushen
+        shell: bash
         run: |
-          # Konfiguriere Git
-          git config user.name "${GIT_COMMITTER_NAME}"
-          git config user.email "${GIT_COMMITTER_EMAIL}"
+          git config user.name "${GIT_USER}"
+          git config user.email "${GIT_EMAIL}"
 
-          # Stage nur die geänderten Dateien im metrics-Ordner
-          git add metrics/${{ matrix.part }}/${{ matrix.metric }}
+          # Stage nur das eine Symbol
+          git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}
 
-          # Wenn es Änderungen gibt, commit und push
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(metrics): update ${{ matrix.metric }} ${{ matrix.part }} [skip ci]"
+          # Wenn Änderungen vorhanden, rebasen, committen und pushen
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git pull --rebase --autostash origin main
+            git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "Keine Änderungen in metrics/${{ matrix.part }}/${{ matrix.metric }}"
+            echo "Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }}"
           fi
