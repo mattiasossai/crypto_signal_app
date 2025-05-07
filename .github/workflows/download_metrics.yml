@@ -5,7 +5,7 @@ on:
 
 jobs:
   download_metrics:
-    # Job-Name zeigt Matrix-Kombination in der Actions-UI an
+    # Klarer Job-Name für die Actions-UI
     name: Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
 
@@ -13,10 +13,12 @@ jobs:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
-      max-parallel: 36  # alle Kombinationen parallel
+        # Nur die 6 gewünschten Symbole
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 36  # alle Kombis gleichzeitig
 
     env:
+      # DEINE neue Proxy-URL hier:
       PROXY_URL: https://crypto-signal-app-1.onrender.com
       GIT_USER: github-actions[bot]
       GIT_EMAIL: github-actions[bot]@users.noreply.github.com
@@ -36,6 +38,7 @@ jobs:
       - name: Metrics herunterladen
         shell: bash
         run: |
+          # Part1 oder Part2 definieren
           if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"
             END="2022-12-31"
@@ -47,27 +50,27 @@ jobs:
           chmod +x metrics/download_metrics_range.sh
 
           PROXY_URL="${PROXY_URL}" \
-          metrics/download_metrics_range.sh \
-            "${{ matrix.metric }}" \
-            "$START" \
-            "$END" \
-            "${{ matrix.part }}" \
-            "${{ matrix.symbol }}"
+            metrics/download_metrics_range.sh \
+              "${{ matrix.metric }}" \
+              "$START" \
+              "$END" \
+              "${{ matrix.part }}" \
+              "${{ matrix.symbol }}"
 
-      - name: Änderungen committen und pushen (robust)
+      - name: Änderungen committen & pushen (robust)
         shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # immer auf neuesten Remote-Stand setzen, ohne lokale Änderungen zu verwerfen
+          # Immer auf aktuellen Remote-Stand setzen, lokale Dateien bleiben erhalten
           git fetch origin main
           git reset --mixed origin/main
 
-          # Stage alle neuen/geänderten JSONs für diesen Job
+          # Stage alle neuen/geänderten JSONs für dieses Symbol/Metric/Part
           git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
 
-          # Commit & Push nur, wenn es Änderungen gibt
+          # Commit & Push nur, wenn Änderungen vorliegen
           if ! git diff --cached --quiet; then
             git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }}/${{ matrix.symbol }} [skip ci]"
             git push origin HEAD:main
