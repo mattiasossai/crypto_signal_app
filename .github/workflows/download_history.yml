@@ -28,32 +28,35 @@ jobs:
       - name: Tools installieren
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip
+          sudo apt-get install -y curl unzip jq
 
       - name: History herunterladen
         shell: bash
         run: |
           chmod +x historical/download_history_range.sh
 
-          # Script-Aufruf: symbol interval
+          # Aufruf: symbol interval
           historical/download_history_range.sh \
             "${{ matrix.symbol }}" \
             "${{ matrix.interval }}"
 
-      - name: Neue Dateien committen & pushen
+      - name: Änderungen committen und pushen (robust)
         shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Stage nur den Ordner für dieses Symbol/Intervall
-          git add historical/${{ matrix.symbol }}/${{ matrix.interval }}
+          # Aktuellsten Remote-Stand holen und HEAD darauf resetten
+          git fetch origin main
+          git reset --mixed origin/main
 
-          # Nur committen, wenn es tatsächliche Änderungen gibt
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git pull --rebase --autostash origin main
+          # Stage alle neuen oder geänderten CSVs für dieses Symbol/Intervall
+          git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/*.csv
+
+          # Wenn es Änderungen gibt, committen & pushen
+          if ! git diff --cached --quiet; then
             git commit -m "chore(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "Keine neuen Dateien für ${{ matrix.symbol }} ${{ matrix.interval }}"
+            echo "🚀 Keine neuen Dateien für ${{ matrix.symbol }}/$({{ matrix.interval }})"
           fi
