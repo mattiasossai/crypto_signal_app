@@ -12,7 +12,7 @@ START="$2"     # YYYY-MM-DD
 END="$3"       # YYYY-MM-DD (exclusive)
 PART="$4"      # part1 | part2
 
-# Optional: nur ein Symbol, wenn 5. Argument gesetzt
+# Optional: nur ein Symbol, wenn 5. Argument übergeben
 if [ $# -eq 5 ]; then
   SYMBOLS=("$5")
 else
@@ -21,15 +21,15 @@ fi
 
 : "${PROXY_URL:?Please set PROXY_URL in env!}"
 
-# Zielverzeichnis für den aktuellen Symbol-Job
+# Zielverzeichnis: ein Unterordner je Symbol
 TARGET="metrics/${PART}/${METRIC}/${SYMBOLS[0]}"
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
-# Hilfsfunktion: YYYY-MM-DD → Millisekunden
+# Hilfsfunktion: YYYY-MM-DD → ms
 to_ms(){ date -d "$1" +%s000; }
 
-# Bash-basierter URL-Encoder
+# Bash-URL-Encoder
 urlencode() {
   local s="$1" enc="" i c o
   for (( i=0; i<${#s}; i++ )); do
@@ -52,7 +52,7 @@ case "$METRIC" in
 
       for sym in "${SYMBOLS[@]}"; do
         if [[ "$METRIC" == "open_interest" ]]; then
-          # Limit auf 500 gesetzt, um code:-1130 zu vermeiden
+          # Limit auf 500 statt 1000, um Binance-Fehler -1130 zu vermeiden
           BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=500"
         else
           BIN_URL="https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000"
@@ -80,10 +80,16 @@ case "$METRIC" in
         echo "→ Downloading liquidity ${sym} @ ${cur}"
 
         raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}") \
-          || { echo "⚠️ Fehler bei ${sym} ${cur}, fallback leer"; raw='{"bids":[],"asks":[]}' ; }
+          || { echo "⚠️ Fehler bei ${sym} ${cur}, schreibe leere Datei"; raw='{"bids":[],"asks":[]}' ; }
 
-        bid0=$(jq '(.bids[0][0] // 0) | tonumber'  <<<"$raw")
-        ask0=$(jq '(.asks[0][0] // 0) | tonumber'  <<<"$raw")
+        # Absichern gegen leere oder null-Antworten
+        bids=$(jq -e '.bids // []' <<<"$raw")
+        asks=$(jq -e '.asks // []' <<<"$raw")
+
+        bid0=$(jq 'if ($bids|length)>0 then $bids[0][0]|tonumber else 0 end' \
+                 --argjson bids "$bids" <<<"$raw")
+        ask0=$(jq 'if ($asks|length)>0 then $asks[0][0]|tonumber else 0 end' \
+                 --argjson asks "$asks" <<<"$raw")
         mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
         spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
         bid_depth=$(jq '[ .bids[][1]|tonumber ] | add' <<<"$raw")
