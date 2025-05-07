@@ -7,25 +7,23 @@ if [ $# -ne 4 ]; then
   exit 1
 fi
 
-METRIC="$1"
-START="$2"
-END="$3"
-PART="$4"
+METRIC="$1"    # open_interest | funding_rate | liquidity
+START="$2"     # YYYY-MM-DD
+END="$3"       # YYYY-MM-DD (exclusive)
+PART="$4"      # part1 | part2
 
 : "${WORKER_URL:?Please set WORKER_URL in env!}"
 
 TARGET="metrics/${PART}/${METRIC}"
-# lösche alle alten JSON, damit wirklich neu überschrieben wird
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
 SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
 
-# konvertiert YYYY-MM-DD → Unix-Millisekunden (13 Stellen)
 to_ms(){ date -d "$1" +%s000; }
 
 if [[ "$METRIC" == "open_interest" ]]; then
-  # 1d Open Interest
+  # bleibt wie gehabt, täglich 1d-Windows, Splitting pro Tag
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     nxt=$(date -I -d "$cur +1 day")
@@ -39,28 +37,50 @@ if [[ "$METRIC" == "open_interest" ]]; then
   done
 
 elif [[ "$METRIC" == "funding_rate" ]]; then
-  # 8h Funding Rate
+  # Neu: 1 Request pro Tag + limit=1000
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
-    for h in 0 8 16; do
-      s=$(date -d "$cur +${h} hour" +%s000)
-      e=$(date -d "$cur +$((h+8)) hour" +%s000)
-      for sym in "${SYMBOLS[@]}"; do
-        curl -s "${WORKER_URL}/funding-rate?symbol=${sym}&startTime=${s}&endTime=${e}" \
-          > "${TARGET}/${sym}_${cur}_${h}.json"
-        sleep 0.1
-      done
+    nxt=$(date -I -d "$cur +1 day")
+    s=$(to_ms "$cur") e=$(to_ms "$nxt")
+    for sym in "${SYMBOLS[@]}"; do
+      curl -s "${WORKER_URL}/funding-rate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000" \
+        > "${TARGET}/${sym}_${cur}.json"
+      sleep 0.1
     done
-    cur=$(date -I -d "$cur +1 day")
+    cur="$nxt"
   done
 
 elif [[ "$METRIC" == "liquidity" ]]; then
-  # tägliche Liquidity-Snapshot
+  # Neu: 1 Snapshot pro Tag → Kennzahlen berechnen
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     for sym in "${SYMBOLS[@]}"; do
-      curl -s "${WORKER_URL}/liquidity?symbol=${sym}" \
-        > "${TARGET}/${sym}_${cur}.json"
+      raw=$(curl -s "${WORKER_URL}/liquidity?symbol=${sym}&limit=100")
+      # mid-price & spread
+      bid0=$(jq '(.bids[0][0] | tonumber)'  <<<"$raw")
+      ask0=$(jq '(.asks[0][0] | tonumber)'  <<<"$raw")
+      mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
+      spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
+      # depths
+      bid_depth=$(jq '[ .bids[][1]|tonumber ] | add' <<<"$raw")
+      ask_depth=$(jq '[ .asks[][1]|tonumber ] | add' <<<"$raw")
+
+      jq -n \
+        --arg symbol "$sym" \
+        --arg date   "$cur" \
+        --argjson mid         "$mid" \
+        --argjson spread      "$spread" \
+        --argjson bid_depth   "$bid_depth" \
+        --argjson ask_depth   "$ask_depth" \
+        '{
+          symbol: $symbol,
+          date:   $date,
+          mid,
+          spread,
+          bid_depth,
+          ask_depth
+        }' > "${TARGET}/${sym}_${cur}.json"
+
       sleep 0.1
     done
     cur=$(date -I -d "$cur +1 day")
