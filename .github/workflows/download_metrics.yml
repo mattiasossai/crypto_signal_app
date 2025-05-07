@@ -17,7 +17,7 @@ jobs:
       max-parallel: 36  # alle Kombinationen parallel
 
     env:
-      PROXY_URL: https://crypto-signal-app.onrender.com
+      PROXY_URL: https://crypto-signal-app-1.onrender.com
       GIT_USER: github-actions[bot]
       GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
@@ -60,11 +60,11 @@ jobs:
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Stelle sicher, dass wir auf dem neuesten Remote-Stand basieren
+          # immer auf neuesten Remote-Stand setzen, ohne lokale Änderungen zu verwerfen
           git fetch origin main
           git reset --mixed origin/main
 
-          # Stage alle neuen oder geänderten JSONs für dieses Symbol/Metric/Part
+          # Stage alle neuen/geänderten JSONs für diesen Job
           git add metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
 
           # Commit & Push nur, wenn es Änderungen gibt
