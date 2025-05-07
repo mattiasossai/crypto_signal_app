@@ -11,10 +11,10 @@ jobs:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
         part: [part1, part2]
-    max-parallel: 1
+      max-parallel: 1
 
     env:
-      # Hier deine Render-Proxy-URL
+      # Deine Render-Proxy-URL
       PROXY_URL: https://crypto-signal-app.onrender.com
 
     steps:
@@ -41,7 +41,6 @@ jobs:
           fi
 
           chmod +x metrics/download_metrics_range.sh
-          # Aufruf mit METRIC START END PART
           PROXY_URL="${PROXY_URL}" \
             metrics/download_metrics_range.sh \
               "${{ matrix.metric }}" \
