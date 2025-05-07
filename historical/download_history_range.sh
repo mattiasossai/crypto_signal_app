@@ -8,7 +8,7 @@ if [ $# -ne 2 ]; then
 fi
 
 SYMBOL="$1"      # z.B. BTCUSDT
-INTERVAL="$2"    # z.B. 5m, 1h, 1d
+INTERVAL="$2"    # z.B. 5m,15m,1h,4h
 
 # Zeitfenster: letzter 30 Tage bis gestern
 START=$(date -I -d "30 days ago")
@@ -23,14 +23,14 @@ while [[ "${cur}" < "${END}" ]]; do
   FILENAME="${SYMBOL}-${INTERVAL}-${cur}.csv"
   FILEPATH="${TARGET_DIR}/${FILENAME}"
 
-  if [[ -f "${FILEPATH}" ]]; then
-    echo "→ Skipping existing ${FILEPATH}"
+  # Existenz-Check: Datei irgendwo im historical/-Baum
+  if find historical -type f -name "${FILENAME}" -print -quit | grep -q .; then
+    echo "→ Skipping existing ${FILENAME}"
   else
     ZIPNAME="${SYMBOL}-${INTERVAL}-${cur}.zip"
     URL="${BASE_URL}/${ZIPNAME}"
     echo "→ Downloading ${ZIPNAME} → ${FILENAME}"
 
-    # temporär ins /tmp-Verzeichnis laden und entpacken
     mkdir -p /tmp/cli_hist && cd /tmp/cli_hist
     if curl -sSfL "${URL}" -o "${ZIPNAME}"; then
       unzip -p "${ZIPNAME}" > "${GITHUB_WORKSPACE}/${FILEPATH}"
