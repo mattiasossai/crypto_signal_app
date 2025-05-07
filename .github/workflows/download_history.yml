@@ -12,7 +12,7 @@ jobs:
       matrix:
         symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
         interval: [1m,5m,15m,1h,4h]
-      max-parallel: 24
+      max-parallel: 24  # 6 Symbole × 4 Intervalle parallel
 
     env:
       GIT_USER: github-actions[bot]
@@ -31,25 +31,28 @@ jobs:
           sudo apt-get install -y curl unzip jq
 
       - name: History herunterladen
+        shell: bash
         run: |
           chmod +x historical/download_history_range.sh
           historical/download_history_range.sh \
             "${{ matrix.symbol }}" \
             "${{ matrix.interval }}"
 
-      - name: Änderungen committen & pushen (autostash)
+      - name: Änderungen committen & pushen (robust)
         shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
 
-          # Pull mit Autostash, um Remote-Updates zu integrieren ohne lokale neuen Files zu verlieren
-          git pull --rebase --autostash origin main
+          # 1) Neueste Remote-Commits holen
+          git fetch origin main
+          # 2) Arbeitskopie & Index auf remote/main setzen (lokale neuen CSVs bleiben erhalten)
+          git reset --mixed origin/main
 
-          # Stage nur neu hinzugefügte CSVs
+          # 3) Nur neue/ geänderte CSVs für dieses Symbol/Intervall stage-en
           git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/*.csv
 
-          # Commit & Push, falls es neue Dateien gibt
+          # 4) Commit + Push, wenn es Änderungen gibt
           if ! git diff --cached --quiet; then
             git commit -m "chore(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} [skip ci]"
             git push origin HEAD:main
