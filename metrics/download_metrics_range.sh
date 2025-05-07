@@ -20,10 +20,11 @@ mkdir -p "$TARGET"
 
 SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
 
+# helper: YYYY-MM-DD → ms
 to_ms(){ date -d "$1" +%s000; }
 
 if [[ "$METRIC" == "open_interest" ]]; then
-  # bleibt wie gehabt, täglich 1d-Windows, Splitting pro Tag
+  # tägliche 1d-Windows
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     nxt=$(date -I -d "$cur +1 day")
@@ -37,7 +38,7 @@ if [[ "$METRIC" == "open_interest" ]]; then
   done
 
 elif [[ "$METRIC" == "funding_rate" ]]; then
-  # Neu: 1 Request pro Tag + limit=1000
+  # 1 Request/Tag mit limit=1000 (max. 3 Events → kein 1027)
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     nxt=$(date -I -d "$cur +1 day")
@@ -51,20 +52,23 @@ elif [[ "$METRIC" == "funding_rate" ]]; then
   done
 
 elif [[ "$METRIC" == "liquidity" ]]; then
-  # Neu: 1 Snapshot pro Tag → Kennzahlen berechnen
+  # 1 Snapshot/Tag → berechnete Kennzahlen statt Roh-Blob
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
     for sym in "${SYMBOLS[@]}"; do
       raw=$(curl -s "${WORKER_URL}/liquidity?symbol=${sym}&limit=100")
-      # mid-price & spread
+
+      # Best Bid/Ask
       bid0=$(jq '(.bids[0][0] | tonumber)'  <<<"$raw")
       ask0=$(jq '(.asks[0][0] | tonumber)'  <<<"$raw")
       mid=$(jq -n --arg b "$bid0" --arg a "$ask0" '((($b|tonumber)+($a|tonumber))/2)')
       spread=$(jq -n --arg b "$bid0" --arg a "$ask0" '(($a|tonumber)-($b|tonumber))')
-      # depths
+
+      # Depth‐Summen
       bid_depth=$(jq '[ .bids[][1]|tonumber ] | add' <<<"$raw")
       ask_depth=$(jq '[ .asks[][1]|tonumber ] | add' <<<"$raw")
 
+      # Ausgeben
       jq -n \
         --arg symbol "$sym" \
         --arg date   "$cur" \
@@ -73,8 +77,8 @@ elif [[ "$METRIC" == "liquidity" ]]; then
         --argjson bid_depth   "$bid_depth" \
         --argjson ask_depth   "$ask_depth" \
         '{
-          symbol: $symbol,
-          date:   $date,
+          symbol:    $symbol,
+          date:      $date,
           mid,
           spread,
           bid_depth,
