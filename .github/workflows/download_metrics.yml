@@ -1,3 +1,5 @@
+# .github/workflows/download_metrics.yml
+
 name: Download & Commit 4yr Metrics via Proxy
 
 on:
@@ -10,10 +12,10 @@ jobs:
 
     strategy:
       matrix:
-        metric: [open_interest, funding_rate, liquidity]
+        metric: [open_interest, funding_rate]
         part:   [part1, part2]
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 36
+      max-parallel: 24
 
     env:
       PROXY_URL: ${{ secrets.RAILWAY_PROXY_URL }}
