@@ -4,24 +4,31 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 1) Fan-out: Einzelne Matrix-Jobs laden herunter und liefern Artefakte
-  download-matrix:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. Download-Matrix (Fan-Out): lädt alle JSONs parallel und speichert sie als Artifact
+  # ─────────────────────────────────────────────────────────────────────────────
+  download_matrix:
+    name: 🔄 Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 36
+
     env:
-      PROXY_URL: https://cryptosignalapp-production.up.railway.app
+      PROXY_URL: ${{ secrets.RAILWAY_PROXY_URL }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq unzip
 
-      - name: Run download_metrics_range.sh
+      - name: Download Metrics via Proxy
         shell: bash
         run: |
           chmod +x metrics/download_metrics_range.sh
@@ -34,8 +41,7 @@ jobs:
             END=$(date -I -d "yesterday")
           fi
 
-          echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }} @ $START → $END"
-
+          echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }} from $START to $END"
           metrics/download_metrics_range.sh \
             "${{ matrix.metric }}" \
             "$START" \
@@ -43,54 +49,62 @@ jobs:
             "${{ matrix.part }}" \
             "${{ matrix.symbol }}"
 
-      - name: Upload JSON-Artifacts
+      - name: Upload JSON-Artifact
         uses: actions/upload-artifact@v4
         with:
           name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
-          path: |
-            metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
+          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}/*.json
+          if-no-files-found: ignore
 
-  # 2) Fan-in: Alle Downloads zusammenführen, deduplizieren und einmalig pushen
-  aggregate-and-push:
-    needs: download-matrix
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. Aggregator & Commit (Fan-In): zieht alle Artefakte, merged sie und pusht
+  # ─────────────────────────────────────────────────────────────────────────────
+  aggregate_and_push:
+    name: 📦 Aggregate & Push Metrics
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+    needs: download_matrix
 
-      - name: Download all Metrics-Artifacts
+    env:
+      GIT_USER: github-actions[bot]
+      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
+
+    steps:
+      - name: Checkout fresh
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download all metric-artifacts
         uses: actions/download-artifact@v4
         with:
-          path: new_metrics
+          path: ./metrics-artifacts
 
-      - name: Merge & Dedup JSONs
-        shell: bash
+      - name: Clean old metrics folders
         run: |
-          set -euo pipefail
-          # Gehe durch alle neuen JSONs:
-          find new_metrics -type f -name '*.json' | while read src; do
-            # Zielpfad extrahieren:
-            rel=${src#new_metrics/metrics/}
-            dest="metrics/$rel"
-            if [[ ! -f "$dest" ]]; then
-              echo "→ Hinzufügen: $dest"
-              mkdir -p "$(dirname "$dest")"
-              mv "$src" "$dest"
-            else
-              echo "↩️ Existiert schon, skip: $dest"
-            fi
+          rm -rf metrics/part1 metrics/part2
+          mkdir -p metrics/part1 metrics/part2
+
+      - name: Copy artifacts into metrics/
+        run: |
+          find metrics-artifacts -type f -name '*.json' | while read src; do
+            rel="${src#metrics-artifacts/}"
+            dst="metrics/${rel}"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
           done
 
-      - name: Commit & Push Metrics
+      - name: Commit & Push all Metrics
         shell: bash
         run: |
-          git config user.name "${GITHUB_ACTOR}"
-          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
-
+          git config user.name "${GIT_USER}"
+          git config user.email "${GIT_EMAIL}"
+          git fetch origin main
+          git reset --mixed origin/main
           git add metrics
           if ! git diff --cached --quiet; then
             git commit -m "chore(metrics): full re-download [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine neuen Metrics zum Committen"
+            echo "🚀 No changes after metrics download"
           fi
