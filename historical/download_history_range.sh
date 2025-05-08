@@ -1,50 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# args: SYMBOL INTERVAL
-if [ $# -ne 2 ]; then
-  echo "Usage: $0 SYMBOL INTERVAL"
+# args: SYMBOL INTERVAL START_DATE END_DATE
+if [ $# -ne 4 ]; then
+  echo "Usage: $0 SYMBOL INTERVAL START_DATE END_DATE"
   exit 1
 fi
 
 SYMBOL="$1"      # z.B. BTCUSDT
-INTERVAL="$2"    # z.B. 5m,5m,1h,4h
+INTERVAL="$2"    # z.B. 15m,1h,4h
+START="$3"       # YYYY-MM-DD
+END="$4"         # YYYY-MM-DD (inclusive)
 
-# Zeitfenster: letzter 30 Tage bis gestern
-START=$(date -I -d "30 days ago")
-END=$(date -I -d "yesterday")
+# Zielordner
+TARGET="historical/${SYMBOL}/${INTERVAL}"
+mkdir -p "$TARGET"
 
-BASE_URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}"
-TARGET_DIR="historical/${SYMBOL}/${INTERVAL}"
+# Helper: YYYY-MM-DD → Binance-Zeitstempel in ms
+to_ms(){ date -d "$1" +%s000; }
 
-# Verzeichnis nur anlegen, nicht löschen!
-mkdir -p "${TARGET_DIR}"
+cur="$START"
+while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END +1 day")" ]]; do
+  nxt=$(date -I -d "$cur +1 day")
+  s=$(to_ms "$cur")
+  e=$(to_ms "$nxt")
 
-cur="${START}"
-while [[ "${cur}" < "${END}" ]]; do
-  FILENAME="${SYMBOL}-${INTERVAL}-${cur}.csv"
-  FILEPATH="${TARGET_DIR}/${FILENAME}"
+  echo "↓ Downloading ${SYMBOL}-${INTERVAL} @ ${cur}"
+  # URL per Binance ZIP-Endpoint (Vision)
+  # z.B. https://data.binance.vision/data/futures/um/daily/klines/BTCUSDT/15m/BTCUSDT-15m-2025-05-07.zip
+  ZIP_URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${cur}.zip"
 
-  # Existenz-Check: Datei irgendwo im historical/-Baum
-  if find historical -type f -name "${FILENAME}" -print -quit | grep -q .; then
-    echo "→ Skipping existing ${FILENAME}"
+  # Versuch: runterladen & entpacken
+  if curl -sSf "$ZIP_URL" -o tmp.zip; then
+    unzip -p tmp.zip "${SYMBOL}-${INTERVAL}-${cur}.csv" > "${TARGET}/${SYMBOL}-${INTERVAL}-${cur}.csv"
+    rm tmp.zip
   else
-    ZIPNAME="${SYMBOL}-${INTERVAL}-${cur}.zip"
-    URL="${BASE_URL}/${ZIPNAME}"
-    echo "→ Downloading ${ZIPNAME} → ${FILENAME}"
-
-    # temporär ins /tmp laden und entpacken
-    mkdir -p /tmp/cli_hist && cd /tmp/cli_hist
-    if curl -sSfL "${URL}" -o "${ZIPNAME}"; then
-      unzip -p "${ZIPNAME}" > "${GITHUB_WORKSPACE}/${FILEPATH}"
-      echo "   ✓ Saved ${FILEPATH}"
-    else
-      echo "   ⚠️ Datei nicht gefunden: ${URL}"
-    fi
-    cd - >/dev/null
-    rm -rf /tmp/cli_hist
+    echo "⚠️ Keine Datei für ${cur} (404), überspringe"
   fi
 
-  # nächsten Tag
-  cur=$(date -I -d "${cur} +1 day")
+  cur="$nxt"
 done
