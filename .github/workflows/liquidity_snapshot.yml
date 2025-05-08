@@ -68,24 +68,32 @@ jobs:
           path: ./snapshots-artifacts
 
       - name: 🔀 Merge snapshots into repo
+        shell: bash
         run: |
+          mkdir -p snapshots
+          MOVED=0
           find snapshots-artifacts -type f -name '*.json' | while read src; do
             rel=${src#snapshots-artifacts/}
             dst=snapshots/$rel
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
+            ((MOVED++))
           done
+          echo "Moved $MOVED snapshot files"
+          echo "MOVED=$MOVED" >> $GITHUB_ENV
 
       - name: 🚀 Commit & Push all Snapshots
+        if: env.MOVED != '0'
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
           git add snapshots
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(snapshots): add daily liquidity [skip ci]"
-            git push origin HEAD:main
-          else
-            echo "🚀 No new snapshots to commit"
-          fi
+          git commit -m "chore(snapshots): add daily liquidity [skip ci]"
+          git push origin HEAD:main
+
+      - name: ✅ No new snapshots to commit
+        if: env.MOVED == '0'
+        run: echo "🚀 No new snapshots to commit"
