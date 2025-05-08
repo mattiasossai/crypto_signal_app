@@ -7,14 +7,14 @@ if [ $# -lt 4 ] || [ $# -gt 5 ]; then
   exit 1
 fi
 
-METRIC="$1"
-START="$2"
-END="$3"
-PART="$4"
+METRIC="$1"         # open_interest | funding_rate | liquidity
+START="$2"          # YYYY-MM-DD
+END="$3"            # YYYY-MM-DD (exclusive for OI/FR, inclusive for liquidity loop)
+PART="$4"           # part1 | part2
 if [ $# -eq 5 ]; then
   SYMBOLS=("$5")
 else
-  SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT)
+  SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT SOLUSDT XRPUSDT ENAUSDT)
 fi
 
 : "${PROXY_URL:?Please set PROXY_URL in env!}"
@@ -23,11 +23,16 @@ TARGET_DIR="metrics/${PART}/${METRIC}"
 rm -rf "${TARGET_DIR}"
 mkdir -p "${TARGET_DIR}"
 
-# 10-stellige Sekunden +000 → Binance-kompatibel
+# ───────────────────────────────────────
+# Hilfsfunktionen
+# ───────────────────────────────────────
+
+# 10-stellige Unix-Sekunden
 to_sec(){ date -d "$1" +%s; }
+# Millisekunden im Binance-Format
 to_ms(){ printf '%s000' "$(to_sec "$1")"; }
 
-# URL-encode helper
+# URL-Encoding
 urlencode() {
   local s="$1" enc="" i c o
   for ((i=0; i<${#s}; i++)); do
@@ -41,6 +46,9 @@ urlencode() {
   echo "$enc"
 }
 
+# ───────────────────────────────────────
+# 1) Open Interest
+# ───────────────────────────────────────
 if [[ "$METRIC" == "open_interest" ]]; then
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
@@ -50,15 +58,19 @@ if [[ "$METRIC" == "open_interest" ]]; then
     for sym in "${SYMBOLS[@]}"; do
       BIN_URL="https://fapi.binance.com/futures/data/openInterestHist?symbol=${sym}&period=1d&startTime=${s}&endTime=${e}&limit=1000"
       EURL=$(urlencode "$BIN_URL")
-      echo "→ Download OI ${sym} @ ${cur}"
+      echo "→ Download OpenInterest ${sym} @ ${cur}"
       curl -sSf "${PROXY_URL}/proxy?url=${EURL}" \
         > "${TARGET_DIR}/${sym}_${cur}.json" \
       || echo '{"error":"oi-error"}' > "${TARGET_DIR}/${sym}_${cur}.json"
       sleep 0.05
     done
+
     cur="$nxt"
   done
 
+# ───────────────────────────────────────
+# 2) Funding Rate
+# ───────────────────────────────────────
 elif [[ "$METRIC" == "funding_rate" ]]; then
   cur="$START"
   while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
@@ -68,9 +80,9 @@ elif [[ "$METRIC" == "funding_rate" ]]; then
     for sym in "${SYMBOLS[@]}"; do
       BIN_URL="https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&startTime=${s}&endTime=${e}&limit=1000"
       EURL=$(urlencode "$BIN_URL")
-      echo "→ Download FR ${sym} @ ${cur}"
+      echo "→ Download FundingRate ${sym} @ ${cur}"
       raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}" || echo '[]')
-      # Wenn leeres Array oder kein Eintrag: setze Rate auf 0
+      # Wenn kein Eintrag, ersetze durch Rate=0
       if [[ "$raw" == "[]" ]]; then
         echo '[{"fundingRate":"0","fundingTime":0}]' > tmp.json
         raw=$(<tmp.json)
@@ -79,46 +91,39 @@ elif [[ "$METRIC" == "funding_rate" ]]; then
       echo "$raw" > "${TARGET_DIR}/${sym}_${cur}.json"
       sleep 0.05
     done
+
     cur="$nxt"
   done
 
+# ───────────────────────────────────────
+# 3) Liquidity
+# ───────────────────────────────────────
 elif [[ "$METRIC" == "liquidity" ]]; then
   cur="$START"
-  while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
+  while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END +1 day")" ]]; do
+
     for sym in "${SYMBOLS[@]}"; do
-      # Futures-Orderbook endpoint
       BIN_URL="https://fapi.binance.com/fapi/v1/depth?symbol=${sym}&limit=100"
       EURL=$(urlencode "$BIN_URL")
       echo "→ Download Liquidity ${sym} @ ${cur}"
 
       raw=$(curl -sSf "${PROXY_URL}/proxy?url=${EURL}" || echo '{"bids":[],"asks":[]}')
 
-      # Berechnung, wenn bids/asks da sind
-      bid0=$(echo "$raw" | jq 'if .bids|length>0 then .bids[0][0]|tonumber else null end')
-      ask0=$(echo "$raw" | jq 'if .asks|length>0 then .asks[0][0]|tonumber else null end')
-      mid=$(jq -n --arg b "$bid0" --arg a "$ask0" 'if $b and $a then ((($b|tonumber)+($a|tonumber))/2) else null end')
-      spread=$(jq -n --arg b "$bid0" --arg a "$ask0" 'if $b and $a then (($a|tonumber)-($b|tonumber)) else null end')
-      bid_depth=$(echo "$raw" | jq '[.bids[][1]|tonumber] | add // null')
-      ask_depth=$(echo "$raw" | jq '[.asks[][1]|tonumber] | add // null')
-
-      jq -n \
-        --arg symbol "$sym" \
-        --arg date   "$cur" \
-        --argjson mid       "$mid" \
-        --argjson spread    "$spread" \
-        --argjson bid_depth "$bid_depth" \
-        --argjson ask_depth "$ask_depth" \
-        '{
-          symbol,
-          date,
-          mid,
-          spread,
-          bid_depth,
-          ask_depth
-        }' > "${TARGET_DIR}/${sym}_${cur}.json"
+      # Ein einziger jq-Filter rechnet nur, wenn Werte da sind
+      echo "$raw" | jq --arg symbol "$sym" --arg date "$cur" '
+        {
+          symbol: $symbol,
+          date: $date,
+          mid:      (if (.bids|length>0 and .asks|length>0) then ((.bids[0][0]|tonumber + .asks[0][0]|tonumber)/2) else null end),
+          spread:   (if (.bids|length>0 and .asks|length>0) then ((.asks[0][0]|tonumber - .bids[0][0]|tonumber)) else null end),
+          bid_depth:(if (.bids|length>0) then ([.bids[][1]|tonumber] | add) else null end),
+          ask_depth:(if (.asks|length>0) then ([.asks[][1]|tonumber] | add) else null end)
+        }
+      ' > "${TARGET_DIR}/${sym}_${cur}.json"
 
       sleep 0.05
     done
+
     cur=$(date -I -d "$cur +1 day")
   done
 
