@@ -8,20 +8,20 @@ if [ $# -ne 5 ]; then
 fi
 
 METRIC="$1"         # open_interest | funding_rate | liquidity
-START="$2"          # YYYY-MM-DD (inklusive)
-END="$3"            # YYYY-MM-DD (inklusive)
+START="$2"          # YYYY-MM-DD (inclusive)
+END="$3"            # YYYY-MM-DD (inclusive)
 PART="$4"           # part1 | part2
-SYMBOL="$5"         # z.B. BNBUSDT
+SYMBOL="$5"         # e.g. BNBUSDT
 
 : "${PROXY_URL:?Please set PROXY_URL!}"
 
 TARGET="metrics/${PART}/${METRIC}/${SYMBOL}"
 mkdir -p "$TARGET"
 
-# Helper: Datum → ms-Timestamp
-to_ms() { date -d "$1" +%s000; }
+# helper: date → ms
+to_ms(){ date -d "$1" +%s000; }
 
-# Loop von START bis einschließlich END
+# loop from START to inclusive END
 cur="$START"
 end_ts=$(date -d "$END +1 day" +%s)
 while [ "$(date -d "$cur" +%s)" -lt "$end_ts" ]; do
@@ -31,7 +31,7 @@ while [ "$(date -d "$cur" +%s)" -lt "$end_ts" ]; do
   else
     echo "→ Downloading $METRIC | $PART | $SYMBOL @ $cur"
 
-    # 1) Baue echten Binance-URL
+    # 1) build real Binance URL
     case "$METRIC" in
       open_interest)
         next=$(date -I -d "$cur +1 day")
@@ -50,14 +50,15 @@ while [ "$(date -d "$cur" +%s)" -lt "$end_ts" ]; do
         ;;
     esac
 
-    # 2) Tunnel über deinen Railway-Proxy
+    # 2) proxy-tunnel via /proxy endpoint
+    echo "   Proxy→ ${PROXY_URL}/proxy?url=…"
     if curl -sSf -G "${PROXY_URL}/proxy" \
              --data-urlencode "url=${binance_url}" \
              -o "$FILE.tmp"; then
 
-      ## Post-Processing nach Metric-Typ
+      # 3) post-process per metric
       if [ "$METRIC" = "funding_rate" ]; then
-        # Impute leere Arrays
+        # impute empty arrays
         if jq -e 'type=="array" and length==0' "$FILE.tmp" > /dev/null; then
           echo '[{"fundingRate":"0","fundingTime":0}]' > "$FILE"
           echo "   🚑 Imputed empty funding_rate for $cur"
@@ -67,18 +68,18 @@ while [ "$(date -d "$cur" +%s)" -lt "$end_ts" ]; do
         fi
 
       elif [ "$METRIC" = "liquidity" ]; then
-        # Sicherstellen, dass bids/asks vorhanden
+        # ensure we have bids & asks
         if ! jq -e 'type=="object" and has("bids") and has("asks")' "$FILE.tmp" > /dev/null; then
           raw='{"bids":[],"asks":[]}'
         else
-          raw=$(cat "$FILE.tmp")
+          raw=$(<"$FILE.tmp")
         fi
-        # Flaches JSON-Objekt erstellen
+        # flatten to summary JSON
         echo "$raw" | jq --arg symbol "$SYMBOL" --arg date "$cur" '{
-          symbol: $symbol,
-          date: $date,
-          mid:    (if .bids|length>0 and .asks|length>0 then ((.bids[0][0]|tonumber + .asks[0][0]|tonumber)/2) else null end),
-          spread:(if .bids|length>0 and .asks|length>0 then ((.asks[0][0]|tonumber - .bids[0][0]|tonumber)) else null end),
+          symbol:   $symbol,
+          date:     $date,
+          mid:      (if .bids|length>0 and .asks|length>0 then ((.bids[0][0]|tonumber + .asks[0][0]|tonumber)/2) else null end),
+          spread:   (if .bids|length>0 and .asks|length>0 then ((.asks[0][0]|tonumber - .bids[0][0]|tonumber)) else null end),
           bid_depth:(if .bids|length>0 then ([.bids[][1]|tonumber] | add) else null end),
           ask_depth:(if .asks|length>0 then ([.asks[][1]|tonumber] | add) else null end)
         }' > "$FILE"
@@ -96,6 +97,6 @@ while [ "$(date -d "$cur" +%s)" -lt "$end_ts" ]; do
     fi
   fi
 
-  # nächsten Tag
+  # next day
   cur=$(date -I -d "$cur +1 day")
 done
