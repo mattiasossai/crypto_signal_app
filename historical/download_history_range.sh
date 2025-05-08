@@ -1,43 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: $0 SYMBOL INTERVAL START_DATE END_DATE PART
+# Usage: download_history_range.sh SYMBOL INTERVAL START_DATE END_DATE PART
 if [ $# -ne 5 ]; then
   echo "Usage: $0 SYMBOL INTERVAL START_DATE END_DATE PART"
   exit 1
 fi
 
 SYMBOL="$1"        # z.B. BTCUSDT
-INTERVAL="$2"      # z.B. 5m,15m,1h,4h
-START="$3"         # YYYY-MM-DD (inklusiv)
-END="$4"           # YYYY-MM-DD (inklusiv)
-PART="$5"          # part2 (oder part1, falls Du das nochmal brauchst)
+INTERVAL="$2"      # z.B. 15m, 1h, 4h, 5m, 1m
+START="$3"         # YYYY-MM-DD (inklusive)
+END="$4"           # YYYY-MM-DD (exklusive, d.h. bis gestern +1)
+PART="$5"          # part1 | part2
 
-BASE_DIR="historical/${SYMBOL}/${INTERVAL}/${PART}"
-mkdir -p "${BASE_DIR}"
+# Quelle der Daily ZIPs
+BASE_URL="https://data.binance.vision/data/futures/um/daily/klines"
+
+# Zielverzeichnis
+TARGET_DIR="historical/${SYMBOL}/${INTERVAL}/${PART}"
+mkdir -p "$TARGET_DIR"
 
 cur="$START"
-while [[ "$(date -I -d "$cur")" <= "$(date -I -d "$END")" ]]; do
-  outfile="${BASE_DIR}/${SYMBOL}-${INTERVAL}-${cur}.csv"
+# Korrekte String-Vergleichs-Syntax für Datum
+while [[ "$(date -I -d "$cur")" < "$(date -I -d "$END")" ]]; do
+  filename="${SYMBOL}-${INTERVAL}-${cur}.csv"
+  target_file="${TARGET_DIR}/${filename}"
 
-  if [[ -f "$outfile" ]]; then
-    echo "→ SKIP existing ${outfile}"
+  if [ -f "$target_file" ]; then
+    echo "✅ Skipping existing $filename"
   else
-    echo "→ DOWNLOAD ${SYMBOL} ${INTERVAL} @ ${cur}"
-    # 1) URL für den Binanz-Vision-Daily-Download
-    ZIP_URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${cur}.zip"
-    # 2) zip holen, entpacken, CSV verschieben
-    tmpdir=$(mktemp -d)
-    if curl -sfL "$ZIP_URL" -o "${tmpdir}/dl.zip"; then
-      unzip -q "${tmpdir}/dl.zip" -d "$tmpdir"
-      mv "${tmpdir}/${SYMBOL}-${INTERVAL}-${cur}.csv" "$outfile"
-      echo "   ✔ saved to ${outfile}"
+    echo "⬇️  Downloading $filename"
+    zip_url="${BASE_URL}/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${cur}.zip"
+    tmp_zip="/tmp/${SYMBOL}-${INTERVAL}-${cur}.zip"
+
+    # ZIP herunterladen
+    if curl -sSf "$zip_url" -o "$tmp_zip"; then
+      # direkt aus dem ZIP in die CSV streamen
+      unzip -p "$tmp_zip" "${SYMBOL}-${INTERVAL}-${cur}.csv" > "$target_file"
+      rm "$tmp_zip"
+      echo "   ✔️ Saved to $target_file"
     else
-      echo "   ⚠ no data for ${cur}, skipping"
+      echo "   ⚠ Warning: ZIP not found for $cur"
+      rm -f "$tmp_zip"
     fi
-    rm -rf "$tmpdir"
   fi
 
-  # nächster Tag
+  # Nächster Tag
   cur=$(date -I -d "$cur +1 day")
 done
