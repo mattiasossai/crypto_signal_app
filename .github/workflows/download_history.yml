@@ -1,21 +1,18 @@
-name: 📥 Download & Commit Historical Data
+name: 🔄 Full Download & Commit Historical Data
 
 on:
   workflow_dispatch:
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 1. Download-Matrix (Fan-Out): holt die letzten 30 Tage History pro Symbol/Interval
-  # ─────────────────────────────────────────────────────────────────────────────
   download_matrix:
-    name: 🔄 Download History ${{ matrix.symbol }} @ ${{ matrix.interval }} (Last 30d)
+    name: Download History ${{ matrix.symbol }} @ ${{ matrix.interval }}
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-        interval: [1h]    # bei Bedarf weitere Intervalle hinzufügen
-      max-parallel: 6
+        interval: [1m, 5m, 15m, 1h, 4h]
+      max-parallel: 30
 
     steps:
       - name: Checkout
@@ -28,8 +25,12 @@ jobs:
         shell: bash
         run: |
           chmod +x historical/download_history_range.sh
-          START=$(date -I -d "yesterday - 29 days")   # 30 Tage zurück
-          END=$(date -I -d "yesterday")               # bis gestern (exklusiv heute)
+
+          # Fixed-Range Full Download:
+          START="2020-01-01"
+          END="2025-05-07"
+
+          echo "→ Downloading ${{ matrix.symbol }} @ ${{ matrix.interval }} from $START to $END"
           historical/download_history_range.sh \
             "${{ matrix.symbol }}" \
             "${{ matrix.interval }}" \
@@ -44,11 +45,8 @@ jobs:
             historical/${{ matrix.symbol }}/${{ matrix.interval }}/*.csv
           if-no-files-found: ignore
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 2. Aggregator & Commit (Fan-In): merged alle neuen Files ins Repo und pusht
-  # ─────────────────────────────────────────────────────────────────────────────
   aggregate_and_push:
-    name: 📦 Aggregate & Push Historical Data
+    name: 📦 Aggregate & Push All Historical
     runs-on: ubuntu-latest
     needs: download_matrix
 
@@ -68,20 +66,19 @@ jobs:
         with:
           path: ./historical-artifacts
 
-      - name: Merge new CSVs
+      - name: Merge new CSVs into repo
         shell: bash
         run: |
-          # Alle CSVs aus den Artifacts durchgehen
-          find historical-artifacts -type f -name '*.csv' | while read src; do
-            # Beispiel src: historical-artifacts/historical/BTCUSDT/1h/BTCUSDT-1h-2025-04-08.csv
-            rel=${src#historical-artifacts/}      # historical/BTCUSDT/1h/... 
-            dst=$rel                              # Ziel im Repo
+          for src in historical-artifacts/**/*.csv; do
+            # e.g. BNBUSDT/1h/BNBUSDT-1h-2025-05-07.csv
+            rel=${src#historical-artifacts/}
+            dst="historical/${rel}"
             if [ ! -f "$dst" ]; then
               mkdir -p "$(dirname "$dst")"
               mv "$src" "$dst"
-              echo "➕ Added $dst"
+              echo "   ➕ Added $dst"
             else
-              echo "✔️ Skipping existing $dst"
+              echo "   ⏭ Skipped existing $dst"
             fi
           done
 
@@ -94,8 +91,8 @@ jobs:
           git reset --mixed origin/main
           git add historical
           if ! git diff --cached --quiet; then
-            git commit -m "chore(historical): add last 30 days data [skip ci]"
+            git commit -m "chore(history): full rebuild 2020-2025 [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 No new historical data to commit"
+            echo "🚀 No changes to push"
           fi
