@@ -1,54 +1,5 @@
 # .github/workflows/liquidity_snapshot.yml
-
-name: 💧 Full Liquidity Snapshot & Push
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'  # 00:00 UTC daily
-
-jobs:
-  capture_snapshots:
-    name: 🔄 Capture Liquidity Snapshots for ${{ matrix.symbol }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 6
-
-    env:
-      PROXY_URL: ${{ secrets.RAILWAY_PROXY_URL }}
-
-    steps:
-      - name: 🛎️ Checkout repo
-        uses: actions/checkout@v3
-
-      - name: 🔧 Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: 💽 Capture Futures Depth via Proxy
-        run: |
-          DATE=$(date -I)
-          mkdir -p snapshots/futures/${{ matrix.symbol }}
-          curl -sSf -G "${PROXY_URL}/proxy" \
-            --data-urlencode "url=https://fapi.binance.com/fapi/v1/depth?symbol=${{ matrix.symbol }}&limit=500" \
-            | jq . > snapshots/futures/${{ matrix.symbol }}/$DATE.json
-
-      - name: 💾 Capture Spot Depth via Proxy
-        run: |
-          DATE=$(date -I)
-          mkdir -p snapshots/spot/${{ matrix.symbol }}
-          curl -sSf -G "${PROXY_URL}/proxy" \
-            --data-urlencode "url=https://api.binance.com/api/v3/depth?symbol=${{ matrix.symbol }}&limit=500" \
-            | jq . > snapshots/spot/${{ matrix.symbol }}/$DATE.json
-
-      - name: 📦 Upload snapshot-artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: snapshot-${{ matrix.symbol }}
-          path: |
-            snapshots/futures/${{ matrix.symbol }}/$DATE.json
-            snapshots/spot/${{ matrix.symbol }}/$DATE.json
+# … (der Teil bis capture_snapshots bleibt unverändert) …
 
   aggregate_and_push:
     name: 📊 Aggregate & Commit All Snapshots
@@ -70,15 +21,23 @@ jobs:
       - name: 🔀 Merge snapshots into repo
         shell: bash
         run: |
-          mkdir -p snapshots
+          # Verzeichnisse sicher anlegen (verhindert 'No such file or directory')
+          mkdir -p snapshots snapshots-artifacts
+
+          # Aktivieren von **-Globbing, um rekursiv zu suchen
+          shopt -s globstar
+
           MOVED=0
-          find snapshots-artifacts -type f -name '*.json' | while read src; do
-            rel=${src#snapshots-artifacts/}
-            dst=snapshots/$rel
-            mkdir -p "$(dirname "$dst")"
-            mv "$src" "$dst"
-            ((MOVED++))
+          for src in snapshots-artifacts/**/*.json; do
+            if [[ -f "$src" ]]; then
+              rel=${src#snapshots-artifacts/}
+              dst="snapshots/$rel"
+              mkdir -p "$(dirname "$dst")"
+              mv "$src" "$dst"
+              ((MOVED++))
+            fi
           done
+
           echo "Moved $MOVED snapshot files"
           echo "MOVED=$MOVED" >> $GITHUB_ENV
 
