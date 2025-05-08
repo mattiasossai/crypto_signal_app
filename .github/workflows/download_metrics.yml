@@ -4,32 +4,26 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ────────────────────────────────────────────────────────────────────────────
-  # 1. Download-Matrix (Fan-Out)
-  # ────────────────────────────────────────────────────────────────────────────
-  download_matrix:
-    name: 🔄 Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
+  download:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 36
-
-    env:
-      PROXY_URL: https://cryptosignalapp-production.up.railway.app
 
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       - name: Download JSONs via Proxy
         shell: bash
+        env:
+          PROXY_URL: ${{ vars.PROXY_URL }}
         run: |
           chmod +x metrics/download_metrics_range.sh
 
@@ -41,71 +35,38 @@ jobs:
             END=$(date -I -d "yesterday")
           fi
 
-          PROXY_URL="$PROXY_URL" \
+          echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} @ $START → $END"
+          PROXY_URL="${PROXY_URL}" \
             metrics/download_metrics_range.sh \
               "${{ matrix.metric }}" \
               "$START" \
               "$END" \
-              "${{ matrix.part }}" \
-              "${{ matrix.symbol }}"
+              "${{ matrix.part }}"
 
       - name: Upload JSON-Artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
-          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}/*.json
-          if-no-files-found: ignore
+          name: metrics-${{ matrix.metric }}-${{ matrix.part }}
+          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/*.json
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # 2. Aggregator & Commit (Fan-In)
-  # ────────────────────────────────────────────────────────────────────────────
-  aggregate_and_push:
-    name: 📦 Aggregate & Push Metrics
-    runs-on: ubuntu-latest
-    needs: download_matrix
-    if: needs.download_matrix.result == 'success'
-
-    env:
-      GIT_USER: github-actions[bot]
-      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
-
-    steps:
-      - name: Checkout fresh
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Download all metric-artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./metrics-artifacts
-
-      - name: Clean old metrics folders
-        run: |
-          rm -rf metrics/part1 metrics/part2
-          mkdir -p metrics/part1 metrics/part2
-
-      - name: Copy artifacts into metrics/
-        run: |
-          find metrics-artifacts -type f -name '*.json' | while read src; do
-            rel="${src#metrics-artifacts/}"
-            dst="metrics/${rel}"
-            mkdir -p "$(dirname "$dst")"
-            mv "$src" "$dst"
-          done
-
-      - name: Commit & Push all Metrics
+      - name: Aggregate & Push Metrics
+        if: ${{ always() }}
         shell: bash
         run: |
-          git config user.name "${GIT_USER}"
-          git config user.email "${GIT_EMAIL}"
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+          # hol’ frischen Stand
           git fetch origin main
           git reset --mixed origin/main
-          git add metrics
+
+          # nur die neuen/ geänderten JSONs hinzufügen
+          git add metrics/${{ matrix.part }}/${{ matrix.metric }}/*.json
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore(metrics): full re-download [skip ci]"
+            git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }} [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine Änderungen nach Full-Download"
+            echo "🚀 Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}"
           fi
