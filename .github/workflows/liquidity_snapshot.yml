@@ -1,11 +1,9 @@
-# .github/workflows/liquidity_snapshot.yml
-
 name: 💧 Full Liquidity Snapshot & Push
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'  # 00:00 UTC daily
+    - cron: '0 0 * * *'
 
 jobs:
   capture_snapshots:
@@ -46,9 +44,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ matrix.symbol }}
+          if-no-files-found: warn
           path: |
-            snapshots/futures/${{ matrix.symbol }}/$DATE.json
-            snapshots/spot/${{ matrix.symbol }}/$DATE.json
+            snapshots/futures/${{ matrix.symbol }}/*.json
+            snapshots/spot/${{ matrix.symbol }}/*.json
 
   aggregate_and_push:
     name: 📊 Aggregate & Commit All Snapshots
@@ -66,14 +65,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./snapshots-artifacts
+          if-no-files-found: ignore
 
       - name: 🔀 Merge snapshots into repo
         shell: bash
         run: |
-          # Ensure directories exist
           mkdir -p snapshots snapshots-artifacts
           shopt -s globstar
-
           MOVED=0
           for src in snapshots-artifacts/**/*.json; do
             if [[ -f "$src" ]]; then
@@ -84,8 +82,6 @@ jobs:
               ((MOVED++))
             fi
           done
-
-          echo "Moved $MOVED snapshot files"
           echo "MOVED=$MOVED" >> $GITHUB_ENV
 
       - name: 🚀 Commit & Push all Snapshots
