@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 1. Download-Matrix (Fan-Out): lädt alle JSONs parallel und speichert sie als Artifact
-  # ─────────────────────────────────────────────────────────────────────────────
   download_matrix:
     name: 🔄 Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
@@ -25,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq unzip
@@ -58,9 +55,6 @@ jobs:
           path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}/*.json
           if-no-files-found: ignore
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 2. Aggregator & Commit (Fan-In): zieht alle Artefakte, merged sie und pusht
-  # ─────────────────────────────────────────────────────────────────────────────
   aggregate_and_push:
     name: 📦 Aggregate & Push Metrics
     runs-on: ubuntu-latest
