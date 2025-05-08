@@ -1,5 +1,3 @@
-# .github/workflows/download_metrics.yml
-
 name: Download & Commit 4yr Metrics via Proxy
 
 on:
