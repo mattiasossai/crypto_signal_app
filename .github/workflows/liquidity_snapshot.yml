@@ -1,9 +1,11 @@
+# .github/workflows/liquidity_snapshot.yml
+
 name: 💧 Full Liquidity Snapshot & Push
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *'  # täglich um Mitternacht UTC
 
 jobs:
   capture_snapshots:
@@ -44,7 +46,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ matrix.symbol }}
-          if-no-files-found: warn
           path: |
             snapshots/futures/${{ matrix.symbol }}/*.json
             snapshots/spot/${{ matrix.symbol }}/*.json
@@ -64,38 +65,37 @@ jobs:
       - name: 📥 Download all snapshot-artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./snapshots-artifacts
-          if-no-files-found: ignore
+          # lädt alle 'snapshot-*' Artefakte in dieses Verzeichnis
+          path: snapshots-artifacts
 
       - name: 🔀 Merge snapshots into repo
         shell: bash
         run: |
-          mkdir -p snapshots snapshots-artifacts
-          shopt -s globstar
-          MOVED=0
-          for src in snapshots-artifacts/**/*.json; do
-            if [[ -f "$src" ]]; then
+          set -e
+          mkdir -p snapshots
+          # Wie viele JSONs haben wir?
+          COUNT=$(find snapshots-artifacts -type f -name '*.json' | wc -l) 
+          echo "➡️ Found $COUNT snapshot files"
+          if [ "$COUNT" -gt 0 ]; then
+            find snapshots-artifacts -type f -name '*.json' | while read src; do
               rel=${src#snapshots-artifacts/}
               dst="snapshots/$rel"
               mkdir -p "$(dirname "$dst")"
               mv "$src" "$dst"
-              ((MOVED++))
-            fi
-          done
-          echo "MOVED=$MOVED" >> $GITHUB_ENV
+            done
+            echo "➡️ Moved all snapshots into snapshots/"
 
-      - name: 🚀 Commit & Push all Snapshots
-        if: env.MOVED != '0'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --mixed origin/main
-          git add snapshots
-          git commit -m "chore(snapshots): add daily liquidity [skip ci]"
-          git push origin HEAD:main
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git fetch origin main
+            git reset --mixed origin/main
+            git add snapshots
+            git commit -m "chore(snapshots): add daily liquidity [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "✅ No new snapshots to commit"
+          fi
 
-      - name: ✅ No new snapshots to commit
-        if: env.MOVED == '0'
-        run: echo "🚀 No new snapshots to commit"
+      - name: 🛑 Clean up artifacts dir
+        if: always()
+        run: rm -rf snapshots-artifacts
