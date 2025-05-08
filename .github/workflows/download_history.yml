@@ -1,30 +1,28 @@
-name: 📥 Download Rolling History (last 30d)
+name: 📥 Download & Commit Rolling History (last 30d)
 
 on:
   workflow_dispatch:
 
 jobs:
-  download-history:
+  # 1) Herunterladen in 30 Einzel-Jobs (pro Symbol × Interval)
+  download-matrix:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
         interval: [1m,5m,15m,1h,4h]
     steps:
-      - name: Checkout Repo
+      - name: Checkout
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
 
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
-
-      - name: Download History for ${{ matrix.symbol }} @ ${{ matrix.interval }}
+      - name: Download History für ${{ matrix.symbol }} | ${{ matrix.interval }}
+        shell: bash
         run: |
           chmod +x historical/download_history_range.sh
-          # wir laden die letzten 30 Tage bis gestern
+
           START=$(date -I -d "30 days ago")
           END=$(date -I -d "yesterday")
+
           historical/download_history_range.sh \
             "${{ matrix.symbol }}" \
             "${{ matrix.interval }}" \
@@ -32,19 +30,61 @@ jobs:
             "$END" \
             part2
 
-      - name: Commit new CSVs
-        run: |
-          git config user.name "${GIT_USER}"
-          git config user.email "${GIT_EMAIL}"
-          # Nur die neu hinzugefügten CSVs für dieses Symbol/Interval
-          git add historical/${{ matrix.symbol }}/${{ matrix.interval }}/part2/*.csv
+      - name: Artifact hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: history-${{ matrix.symbol }}-${{ matrix.interval }}
+          path: |
+            historical/${{ matrix.symbol }}/${{ matrix.interval }}/part2/*.csv
 
+  # 2) Alle heruntergeladenen CSVs sammeln, deduplizieren und in einem Commit pushen
+  aggregate-and-push:
+    needs: download-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Lade alle History-Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: new_history
+
+      - name: Merge & Dedup der CSVs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Gehe alle neuen CSVs durch:
+          find new_history -type f -name '*.csv' | while read f; do
+            # Pfad nach new_history/historical/SYMBOL/INTERVAL/part2/DATE.csv
+            rel=${f#new_history/historical/}
+            # SYMBOL = erster Teil
+            symbol=${rel%%/*}
+            rest=${rel#*/}
+            # INTERVAL = zweiter Teil
+            interval=${rest%%/*}
+            filename=$(basename "$f")
+            dest="historical/$symbol/$interval/$filename"
+
+            if [[ ! -f "$dest" ]]; then
+              echo "→ Hinzufügen: $dest"
+              mkdir -p "$(dirname "$dest")"
+              mv "$f" "$dest"
+            else
+              echo "↩️ Datei existiert bereits, überspringe: $dest"
+            fi
+          done
+
+      - name: Commit & Push
+        shell: bash
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+          git add historical
           if ! git diff --cached --quiet; then
-            git commit -m "chore(history): add rolling ${{ matrix.symbol }} ${{ matrix.interval }} [skip ci]"
+            git commit -m "chore(history): add rolling last-30d [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 No new CSVs for ${{ matrix.symbol }} ${{ matrix.interval }}"
+            echo "🚀 Keine neuen History-CSVs zum Committen"
           fi
-        env:
-          GIT_USER: github-actions[bot]
-          GIT_EMAIL: github-actions[bot]@users.noreply.github.com
