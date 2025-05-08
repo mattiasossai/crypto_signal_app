@@ -1,4 +1,4 @@
-name: Download & Commit 4yr Metrics via Proxy
+name: 📈 Download & Commit 4yr Metrics via Proxy
 
 on:
   workflow_dispatch:
@@ -19,15 +19,15 @@ jobs:
       PROXY_URL: ${{ secrets.RAILWAY_PROXY_URL }}
 
     steps:
-      - name: Checkout
+      - name: 🛎️ Checkout
         uses: actions/checkout@v3
 
-      - name: Install dependencies
+      - name: 🔧 Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq unzip
 
-      - name: Download Metrics via Proxy
+      - name: 📊 Download Metrics via Proxy
         shell: bash
         run: |
           chmod +x metrics/download_metrics_range.sh
@@ -48,7 +48,7 @@ jobs:
             "${{ matrix.part }}" \
             "${{ matrix.symbol }}"
 
-      - name: Upload JSON-Artifact
+      - name: 📦 Upload JSON-Artifact
         uses: actions/upload-artifact@v4
         with:
           name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
@@ -56,7 +56,7 @@ jobs:
           if-no-files-found: ignore
 
   aggregate_and_push:
-    name: 📦 Aggregate & Push Metrics
+    name: 🚀 Aggregate & Push Metrics
     runs-on: ubuntu-latest
     needs: download_matrix
 
@@ -65,25 +65,23 @@ jobs:
       GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
-      - name: Checkout fresh
+      - name: 🛎️ Checkout fresh
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Download all metric-artifacts
+      - name: 📥 Download all metric-artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./metrics-artifacts
 
-      - name: Clean old metrics folders
-        shell: bash
+      - name: 🧹 Clean old metrics folders
         run: |
           rm -rf metrics/part1 metrics/part2
           mkdir -p metrics/part1 metrics/part2
 
-      - name: Copy artifacts into metrics/
-        shell: bash
+      - name: 🔀 Copy artifacts into metrics/
         run: |
           find metrics-artifacts -type f -name '*.json' | while read src; do
             rel="${src#metrics-artifacts/}"
@@ -92,7 +90,7 @@ jobs:
             mv "$src" "$dst"
           done
 
-      - name: Commit & Push all Metrics
+      - name: 📈 Commit & Push all Metrics
         shell: bash
         run: |
           git config user.name "${GIT_USER}"
