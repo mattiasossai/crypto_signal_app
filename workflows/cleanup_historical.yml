@@ -1,0 +1,73 @@
+# .github/workflows/cleanup_historical.yml
+name: Cleanup Historical Duplicates
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Nur anzeigen (true) oder wirklich löschen (false)'
+        required: true
+        default: 'true'
+        type: boolean
+
+jobs:
+  cleanup:
+    name: 🔍🗑️ Cleanup historical CSV Duplicates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Suche und ggf. lösche Duplikate
+        shell: bash
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          cd "$(git rev-parse --show-toplevel)"
+          
+          echo "🔍 Suche doppelte CSV-Dateien unter historical/ (dry-run=$DRY_RUN)…"
+          # 1) Liste Dateinamen, die mehrfach vorkommen
+          dupes=$(find historical -type f -name '*.csv' -printf '%f\n' \
+                    | sort \
+                    | uniq -d)
+          
+          if [[ -z "$dupes" ]]; then
+            echo "✅ Keine Duplikate gefunden."
+            exit 0
+          fi
+          
+          # 2) Für jeden doppelten Dateinamen alle Pfade ermitteln und ab zweitem Eintrag löschen
+          while read -r filename; do
+            echo "⚠️  Duplikat erkannt: $filename"
+            mapfile -t paths < <(find historical -type f -name "$filename" | sort)
+            # paths[0] behalten, ab index 1 löschen
+            for ((i=1; i<${#paths[@]}; i++)); do
+              if [[ "$DRY_RUN" == "true" ]]; then
+                echo "    [DRY-RUN] Würde löschen: ${paths[i]}"
+              else
+                echo "    Lösche: ${paths[i]}"
+                rm "${paths[i]}"
+              fi
+            done
+          done <<< "$dupes"
+
+      - name: Commit & Push (nur bei dry-run=false)
+        if: ${{ github.event.inputs.dry-run == 'false' }}
+        shell: bash
+        env:
+          GIT_USER: github-actions[bot]
+          GIT_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          git config user.name "${GIT_USER}"
+          git config user.email "${GIT_EMAIL}"
+          git add -u historical
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(cleanup): remove historical CSV duplicates [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "🚀 Keine Änderungen zum Committen."
+          fi
