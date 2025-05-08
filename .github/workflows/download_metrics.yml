@@ -1,29 +1,28 @@
-name: Download & Commit Metrics via Proxy
+name: Download & Commit 4yr Metrics via Proxy
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
+  # 1) Fan-out: Einzelne Matrix-Jobs laden herunter und liefern Artefakte
+  download-matrix:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         metric: [open_interest, funding_rate, liquidity]
         part:   [part1, part2]
-
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+    env:
+      PROXY_URL: https://cryptosignalapp-production.up.railway.app
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Install jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Download JSONs via Proxy
+      - name: Run download_metrics_range.sh
         shell: bash
-        env:
-          PROXY_URL: ${{ vars.PROXY_URL }}
         run: |
           chmod +x metrics/download_metrics_range.sh
 
@@ -35,38 +34,63 @@ jobs:
             END=$(date -I -d "yesterday")
           fi
 
-          echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} @ $START → $END"
-          PROXY_URL="${PROXY_URL}" \
-            metrics/download_metrics_range.sh \
-              "${{ matrix.metric }}" \
-              "$START" \
-              "$END" \
-              "${{ matrix.part }}"
+          echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }} @ $START → $END"
 
-      - name: Upload JSON-Artifact
-        if: ${{ always() }}
+          metrics/download_metrics_range.sh \
+            "${{ matrix.metric }}" \
+            "$START" \
+            "$END" \
+            "${{ matrix.part }}" \
+            "${{ matrix.symbol }}"
+
+      - name: Upload JSON-Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-${{ matrix.metric }}-${{ matrix.part }}
-          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/*.json
+          name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
+          path: |
+            metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}_*.json
 
-      - name: Aggregate & Push Metrics
-        if: ${{ always() }}
+  # 2) Fan-in: Alle Downloads zusammenführen, deduplizieren und einmalig pushen
+  aggregate-and-push:
+    needs: download-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Download all Metrics-Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: new_metrics
+
+      - name: Merge & Dedup JSONs
         shell: bash
         run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          set -euo pipefail
+          # Gehe durch alle neuen JSONs:
+          find new_metrics -type f -name '*.json' | while read src; do
+            # Zielpfad extrahieren:
+            rel=${src#new_metrics/metrics/}
+            dest="metrics/$rel"
+            if [[ ! -f "$dest" ]]; then
+              echo "→ Hinzufügen: $dest"
+              mkdir -p "$(dirname "$dest")"
+              mv "$src" "$dest"
+            else
+              echo "↩️ Existiert schon, skip: $dest"
+            fi
+          done
 
-          # hol’ frischen Stand
-          git fetch origin main
-          git reset --mixed origin/main
+      - name: Commit & Push Metrics
+        shell: bash
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
 
-          # nur die neuen/ geänderten JSONs hinzufügen
-          git add metrics/${{ matrix.part }}/${{ matrix.metric }}/*.json
-
+          git add metrics
           if ! git diff --cached --quiet; then
-            git commit -m "chore(metrics): update ${{ matrix.metric }}/${{ matrix.part }} [skip ci]"
+            git commit -m "chore(metrics): full re-download [skip ci]"
             git push origin HEAD:main
           else
-            echo "🚀 Keine Änderungen für ${{ matrix.metric }}/${{ matrix.part }}"
+            echo "🚀 Keine neuen Metrics zum Committen"
           fi
