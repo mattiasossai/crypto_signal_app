@@ -1,52 +1,77 @@
 #!/usr/bin/env python3
 # train/train.py
 
-import glob
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras import Sequential, layers
-from features import load_candles, load_metrics, add_indicators, join_metrics, generate_labels
+import joblib
 
-# 1) Dataset aufbauen
-rows = []
-for symbol in ["BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT","ENAUSDT"]:
-    for interval in ["1m","5m","15m","1h","4h"]:
-        df = load_candles(symbol, interval)
-        df = add_indicators(df)
-        oi = load_metrics('open_interest')
-        fr = load_metrics('funding_rate')
-        df = join_metrics(df, oi, fr)
-        df = generate_labels(df)
-        rows.append(df)
+from features import (
+    SYMBOLS, INTERVALS,
+    load_candles, load_metrics,
+    add_indicators, add_candlestick_patterns,
+    join_metrics, generate_labels
+)
 
-df_all = pd.concat(rows)
+def main():
+    # 1) Load Metrics
+    print("⏳ Loading metrics …")
+    df_oi = load_metrics("open_interest")
+    df_fr = load_metrics("funding_rate")
+    df_metrics = pd.merge(df_oi, df_fr, on=["symbol","date"], how="outer")
 
-# 2) Features / Labels splitten
-X = df_all.drop(columns=['future_close','return','label'])
-y = df_all['label']
+    all_dfs = []
+    # 2) Per Symbol & Interval Prozess
+    for symbol in SYMBOLS:
+        for interval in INTERVALS:
+            print(f"⏳ Processing {symbol} @ {interval}")
+            df = load_candles(symbol, interval)
+            df = add_indicators(df)
+            df = add_candlestick_patterns(df)
+            df = join_metrics(df, df_metrics)
+            df = generate_labels(df)
+            df["symbol"]   = symbol
+            df["interval"] = interval
+            all_dfs.append(df)
 
-# 3) Train/Test Split
-Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, shuffle=False)
+    df_full = pd.concat(all_dfs)
+    print("✅ Feature matrix ready – rows:", len(df_full))
 
-# 4) Skalierung
-scaler = StandardScaler().fit(Xtr)
-Xtr_s = scaler.transform(Xtr)
-Xte_s = scaler.transform(Xte)
+    # 3) Train/Test-Split
+    X = df_full.drop(columns=["symbol","interval","future_close","return","label"])
+    y = df_full["label"].astype(int)
+    Xtr, Xte, ytr, yte = train_test_split(X, y, shuffle=False, test_size=0.2)
 
-# 5) Modell definieren
-model = Sequential([layers.Input(Xtr_s.shape[1]),
-                    layers.Dense(128, activation='relu'),
-                    layers.Dropout(0.3),
-                    layers.Dense(64, activation='relu'),
-                    layers.Dense(3, activation='softmax')])
-model.compile('adam', 'sparse_categorical_crossentropy', ['accuracy'])
+    # 4) Skalierung
+    scaler = StandardScaler().fit(Xtr)
+    Xtr_s = scaler.transform(Xtr)
+    Xte_s = scaler.transform(Xte)
 
-# 6) Trainieren
-model.fit(Xtr_s, ytr, validation_data=(Xte_s, yte), epochs=20, batch_size=256)
+    # 5) Modell definieren
+    model = Sequential([
+        layers.Input(shape=(Xtr_s.shape[1],)),
+        layers.Dense(128, activation="relu"),
+        layers.Dropout(0.3),
+        layers.Dense(64,  activation="relu"),
+        layers.Dense(3,   activation="softmax"),
+    ])
+    model.compile(
+        optimizer="adam",
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
 
-# 7) Export
-import joblib, tensorflow as tf
-joblib.dump(scaler, 'scaler.pkl')
-ct = tf.lite.TFLiteConverter.from_keras_model(model)
-open('model.tflite','wb').write(ct.convert())
+    # 6) Training
+    print("⏳ Training model …")
+    model.fit(Xtr_s, ytr, validation_data=(Xte_s, yte), epochs=25, batch_size=256)
+
+    # 7) Export
+    print("✅ Saving scaler and model …")
+    joblib.dump(scaler, "scaler.pkl")
+    model.save("model.h5")
+
+    print("🎉 Done.")
+
+if __name__ == "__main__":
+    main()
