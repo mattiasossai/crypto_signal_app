@@ -1,31 +1,22 @@
-# .github/workflows/train_pipeline.yml
-
-name: "🏋️‍♂️ Full Pipeline: Download & Train"
+name: 🏋️‍♂️ Train & Backtest Pipeline
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 1 * *'  # monatlich am 1. um 02:00 UTC
 
 jobs:
   train:
-    name: "🤖 Download Artifacts, Install & Train"
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        python-version: [3.9]
+        python-version: ['3.9']
 
     steps:
-      # 1) Code auschecken
-      - name: Checkout repository
+      - name: 🛎️ Checkout repo
         uses: actions/checkout@v3
 
-      # 2) Python einrichten + pip-Cache
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Cache pip
+      - name: 📦 Cache pip
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
@@ -33,48 +24,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # 3) Dependencies installieren
-      - name: Install training dependencies
+      - name: 🐍 Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 📥 Install training dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r train/requirements.txt
 
-      # 4) Artefakte herunterladen
-      - name: Download Candlestick Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: history-*
-          path: historical_raw/
+      - name: ▶️ Run training script
+        run: python train/train.py
 
-      - name: Download Metrics Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: metrics-*
-          path: metrics_raw/
-
-      # 5) Daten vorbereiten (entpacken/verschieben)
-      - name: Unzip Historical Zips
-        run: |
-          mkdir -p historical
-          for Z in historical_raw/*.zip; do
-            unzip -q "$Z" -d historical/
-          done
-
-      - name: Move Metrics JSONs
-        run: |
-          mkdir -p metrics
-          mv metrics_raw/**/*.json metrics/
-
-      # 6) Training ausführen
-      - name: Run training script
-        working-directory: train
-        run: python train.py
-
-      # 7) Modell-Artefakte hochladen
-      - name: Upload model artifacts
+      - name: 🚀 Upload model artifacts
         uses: actions/upload-artifact@v4
         with:
           name: model-files
           path: |
-            train/scaler.pkl
-            train/model.tflite
+            scaler.pkl
+            model.h5
