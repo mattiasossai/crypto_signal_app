@@ -25,12 +25,13 @@ jobs:
       - name: 🔧 Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq unzip python3-pandas python3-jsonschema
+          sudo apt-get install -y jq unzip
 
-      - name: 📊 Download Metrics
+      - name: 📊 Download Metrics via Proxy
         shell: bash
         run: |
           chmod +x metrics/download_metrics_range.sh
+
           if [[ "${{ matrix.part }}" == "part1" ]]; then
             START="2020-01-01"
             END="2022-12-31"
@@ -38,6 +39,7 @@ jobs:
             START="2023-01-01"
             END=$(date -I -d "yesterday")
           fi
+
           echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }} from $START to $END"
           metrics/download_metrics_range.sh \
             "${{ matrix.metric }}" \
@@ -75,13 +77,11 @@ jobs:
           path: ./metrics-artifacts
 
       - name: 🧹 Clean old metrics folders
-        shell: bash
         run: |
           rm -rf metrics/part1 metrics/part2
           mkdir -p metrics/part1 metrics/part2
 
       - name: 🔀 Copy artifacts into metrics/
-        shell: bash
         run: |
           find metrics-artifacts -type f -name '*.json' | while read src; do
             rel="${src#metrics-artifacts/}"
@@ -91,7 +91,6 @@ jobs:
           done
 
       - name: 📈 Commit & Push all Metrics
-        shell: bash
         run: |
           git config user.name "${GIT_USER}"
           git config user.email "${GIT_EMAIL}"
