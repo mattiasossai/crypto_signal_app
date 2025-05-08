@@ -25,8 +25,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq unzip
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq unzip
 
       - name: Download Metrics via Proxy
         shell: bash
@@ -81,11 +83,13 @@ jobs:
           path: ./metrics-artifacts
 
       - name: Clean old metrics folders
+        shell: bash
         run: |
           rm -rf metrics/part1 metrics/part2
           mkdir -p metrics/part1 metrics/part2
 
       - name: Copy artifacts into metrics/
+        shell: bash
         run: |
           find metrics-artifacts -type f -name '*.json' | while read src; do
             rel="${src#metrics-artifacts/}"
