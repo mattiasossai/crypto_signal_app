@@ -9,32 +9,37 @@ on:
 
 jobs:
   capture_snapshots:
-    name: 💧 Capture Liquidity Snapshots for ${{ matrix.symbol }}
+    name: 🔄 Capture Liquidity Snapshots for ${{ matrix.symbol }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
       max-parallel: 6
 
+    env:
+      PROXY_URL: ${{ secrets.RAILWAY_PROXY_URL }}
+
     steps:
-      - name: 🔄 Checkout repo
+      - name: 🛎️ Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🛠️ Install jq
+      - name: 🔧 Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: 📥 Capture Futures Depth
+      - name: 💽 Capture Futures Depth via Proxy
         run: |
           DATE=$(date -I)
           mkdir -p snapshots/futures/${{ matrix.symbol }}
-          curl -s "https://fapi.binance.com/fapi/v1/depth?symbol=${{ matrix.symbol }}&limit=500" \
+          curl -sSf -G "${PROXY_URL}/proxy" \
+            --data-urlencode "url=https://fapi.binance.com/fapi/v1/depth?symbol=${{ matrix.symbol }}&limit=500" \
             | jq . > snapshots/futures/${{ matrix.symbol }}/$DATE.json
 
-      - name: 📥 Capture Spot Depth
+      - name: 💾 Capture Spot Depth via Proxy
         run: |
           DATE=$(date -I)
           mkdir -p snapshots/spot/${{ matrix.symbol }}
-          curl -s "https://api.binance.com/api/v3/depth?symbol=${{ matrix.symbol }}&limit=500" \
+          curl -sSf -G "${PROXY_URL}/proxy" \
+            --data-urlencode "url=https://api.binance.com/api/v3/depth?symbol=${{ matrix.symbol }}&limit=500" \
             | jq . > snapshots/spot/${{ matrix.symbol }}/$DATE.json
 
       - name: 📦 Upload snapshot-artifact
@@ -51,7 +56,7 @@ jobs:
     needs: capture_snapshots
 
     steps:
-      - name: 🔄 Checkout fresh
+      - name: 🛎️ Checkout fresh
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -82,5 +87,5 @@ jobs:
             git commit -m "chore(snapshots): add daily liquidity [skip ci]"
             git push origin HEAD:main
           else
-            echo "✅ No new snapshots to commit"
+            echo "🚀 No new snapshots to commit"
           fi
