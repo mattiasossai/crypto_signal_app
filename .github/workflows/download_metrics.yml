@@ -1,68 +1,62 @@
-name: 📈 Download & Commit 4yr Metrics via Proxy
+name: 📥 Download & Commit metrics
 
 on:
   workflow_dispatch:
 
 jobs:
-  download_matrix:
-    name: 🔄 Download ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }}
+  download:
+    name: ⬇️ Download metrics | ${{ matrix.symbol }}
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        metric: [open_interest, funding_rate]
-        part:   [part1, part2]
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 24
-
-    env:
-      PROXY_URL: ${{ secrets.RAILWAY_PROXY_URL }}
+      max-parallel: 2
 
     steps:
-      - name: 🛎️ Checkout
+      - name: 🛎️ Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🔧 Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip
+      - name: 🔧 Install unzip & curl
+        run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📊 Download Metrics via Proxy
+      - name: 📥 Download & extract metrics
         shell: bash
         run: |
-          chmod +x metrics/download_metrics_range.sh
+          set -euo pipefail
+          SYMBOL=${{ matrix.symbol }}
+          START="2020-01-01"
+          END=$(date -I -d "yesterday")
+          BASE="data/futures/um/daily/metrics/${SYMBOL}"
+          mkdir -p "$BASE"
+          cur="$START"
+          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
+            DATE=$(date -d "$cur" +%Y-%m-%d)
+            ZIP="${SYMBOL}-${DATE}.zip"
+            URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
+            echo "→ Fetching metrics $DATE"
+            if curl -sSf "$URL" -o tmp.zip; then
+              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
+              echo "   ✅ extracted ${ZIP}"
+            else
+              echo "   ⚠️ missing ${ZIP}"
+              rm -f tmp.zip || true
+            fi
+            cur=$(date -I -d "$cur +1 day")
+          done
+          echo "📊 Disk usage after metrics download:"
+          df -h .
+          du -sh "$BASE" || true
 
-          if [[ "${{ matrix.part }}" == "part1" ]]; then
-            START="2020-01-01"
-            END="2022-12-31"
-          else
-            START="2023-01-01"
-            END=$(date -I -d "yesterday")
-          fi
-
-          echo "→ Downloading ${{ matrix.metric }} | ${{ matrix.part }} | ${{ matrix.symbol }} from $START to $END"
-          metrics/download_metrics_range.sh \
-            "${{ matrix.metric }}" \
-            "$START" \
-            "$END" \
-            "${{ matrix.part }}" \
-            "${{ matrix.symbol }}"
-
-      - name: 📦 Upload JSON-Artifact
+      - name: 📦 Upload metrics artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metrics-${{ matrix.metric }}-${{ matrix.part }}-${{ matrix.symbol }}
-          path: metrics/${{ matrix.part }}/${{ matrix.metric }}/${{ matrix.symbol }}/*.json
-          if-no-files-found: ignore
+          name: data-metrics-${{ matrix.symbol }}
+          path: data/futures/um/daily/metrics/${{ matrix.symbol }}/*
 
   aggregate_and_push:
-    name: 🚀 Aggregate & Push Metrics
+    name: 🚀 Aggregate & Commit metrics Data
+    needs: download
     runs-on: ubuntu-latest
-    needs: download_matrix
-
-    env:
-      GIT_USER: github-actions[bot]
-      GIT_EMAIL: github-actions[bot]@users.noreply.github.com
 
     steps:
       - name: 🛎️ Checkout fresh
@@ -71,35 +65,34 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: 📥 Download all metric-artifacts
+      - name: 📥 Download metrics artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./metrics-artifacts
+          path: data-artifacts
 
-      - name: 🧹 Clean old metrics folders
+      - name: 🔀 Merge metrics into repo
+        shell: bash
         run: |
-          rm -rf metrics/part1 metrics/part2
-          mkdir -p metrics/part1 metrics/part2
-
-      - name: 🔀 Copy artifacts into metrics/
-        run: |
-          find metrics-artifacts -type f -name '*.json' | while read src; do
-            rel="${src#metrics-artifacts/}"
-            dst="metrics/${rel}"
+          set -euo pipefail
+          mkdir -p data/futures/um/daily/metrics
+          find data-artifacts -type f | while read src; do
+            rel=${src#data-artifacts/}
+            dst="data/${rel}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
           done
 
-      - name: 📈 Commit & Push all Metrics
+      - name: 🚀 Commit & Push metrics
+        shell: bash
         run: |
-          git config user.name "${GIT_USER}"
-          git config user.email "${GIT_EMAIL}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add metrics
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(metrics): full re-download [skip ci]"
-            git push origin HEAD:main
+          git add data/futures/um/daily/metrics
+          if git diff --cached --quiet; then
+            echo "✅ No new metrics to commit"
           else
-            echo "🚀 No changes after metrics download"
+            git commit -m "chore(data): import metrics [skip ci]"
+            git push origin HEAD:main
           fi
