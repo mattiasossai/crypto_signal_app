@@ -1,4 +1,6 @@
-name: 📥 Download & Commit indexPriceKlines
+# .github/workflows/download_indexPriceKlines.yml
+
+name: 📥 Download & Commit indexPriceKlines (1h & 4h)
 
 on:
   workflow_dispatch:
@@ -19,39 +21,50 @@ jobs:
       - name: 🔧 Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📥 Download & extract indexPriceKlines
+      - name: 📥 Download & extract indexPriceKlines (1h & 4h)
         shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
           START="2020-01-01"
           END=$(date -I -d "yesterday")
-          BASE="data/futures/um/daily/indexPriceKlines/${SYMBOL}"
-          mkdir -p "$BASE"
-          cur="$START"
-          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-            DATE=$(date -d "$cur" +%Y-%m-%d)
-            ZIP="${SYMBOL}-indexPriceKlines-1d-${DATE}.zip"
-            URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${ZIP}"
-            echo "→ Fetching indexPriceKlines $DATE"
-            if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
-              echo "   ✅ extracted ${ZIP}"
-            else
-              echo "   ⚠️ missing ${ZIP}"
-              rm -f tmp.zip || true
-            fi
-            cur=$(date -I -d "$cur +1 day")
+          # Wähle die Timeframes, die zu eurer Multi-Timeframe-Logik passen:
+          INTERVALS=( "1h" "4h" )
+
+          for iv in "${INTERVALS[@]}"; do
+            BASE="data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}"
+            mkdir -p "$BASE"
+            cur="$START"
+            echo "→ Downloading indexPriceKlines for $SYMBOL @ $iv from $START to $END"
+            while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
+              DATE=$(date -d "$cur" +%Y-%m-%d)
+              ZIP="${SYMBOL}-indexPriceKlines-${iv}-${DATE}.zip"
+              URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
+              echo "    → Fetching $ZIP"
+              if curl -sSf "$URL" -o tmp.zip; then
+                unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
+                echo "       ✅ extracted ${ZIP}"
+              else
+                echo "       ⚠️ missing ${ZIP}"
+                rm -f tmp.zip || true
+              fi
+              cur=$(date -I -d "$cur +1 day")
+            done
           done
+
           echo "📊 Disk usage after indexPriceKlines download:"
           df -h .
-          du -sh "$BASE" || true
+          for iv in "${INTERVALS[@]}"; do
+            du -sh "data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}" || true
+          done
 
-      - name: 📦 Upload indexPriceKlines artifact
+      - name: 📦 Upload indexPriceKlines artifacts
         uses: actions/upload-artifact@v4
         with:
           name: data-indexPriceKlines-${{ matrix.symbol }}
-          path: data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/*
+          path: |
+            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/1h/*
+            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/4h/*
 
   aggregate_and_push:
     name: 🚀 Aggregate & Commit indexPriceKlines Data
@@ -93,6 +106,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "✅ No new indexPriceKlines to commit"
           else
-            git commit -m "chore(data): import indexPriceKlines [skip ci]"
+            git commit -m "chore(data): import indexPriceKlines 1h & 4h [skip ci]"
             git push origin HEAD:main
           fi
