@@ -26,6 +26,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           CATEGORY=${{ matrix.category }}
           SYMBOL=${{ matrix.symbol }}
           START="2020-01-01"
@@ -33,63 +34,38 @@ jobs:
           BASE="data/futures/um/daily/${CATEGORY}/${SYMBOL}"
           mkdir -p "$BASE"
 
-          # ───────────────────────────────────────────────────────────────
-          # 1) indexPriceKlines → einfacher Tages-Loop
-          # ───────────────────────────────────────────────────────────────
-          if [[ "$CATEGORY" == "indexPriceKlines" ]]; then
-            cur="$START"
-            while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-              DATE=$(date -d "$cur" +%Y-%m-%d)
-              ZIP="${SYMBOL}-indexPriceKlines-1d-${DATE}.zip"
-              URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${ZIP}"
-              echo "→ Fetching indexPriceKlines $DATE"
-              if curl -sSf "$URL" -o "$BASE/$ZIP"; then
-                unzip -o "$BASE/$ZIP" -d "$BASE" && rm "$BASE/$ZIP"
-                echo "   ✅ unpacked $ZIP"
-              else
-                echo "   ⚠️ missing $ZIP"
-              fi
-              cur=$(date -I -d "$cur +1 day")
-            done
-            exit 0
-          fi
+          cur="$START"
+          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
+            DATE=$(date -d "$cur" +%Y-%m-%d)
 
-          # ───────────────────────────────────────────────────────────────
-          # 2) aggTrades, bookTicker & metrics → Quarter-Ordner
-          # ───────────────────────────────────────────────────────────────
-          LIST_URL="https://data.binance.vision/data/futures/um/daily/${CATEGORY}/${SYMBOL}/"
-          echo "→ Listing quarters at $LIST_URL"
-          # Quarter-Verzeichnisse wie SYMBOL_230331
-          quarters=(
-            $(curl -s "$LIST_URL" \
-              | grep -oP '(?<=href=")'${SYMBOL}'_[0-9]{6}(?=/")' || true)
-          )
+            case "$CATEGORY" in
+              aggTrades)
+                ZIP="${SYMBOL}-aggTrades-${DATE}.zip"
+                URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
+                ;;
+              bookTicker)
+                ZIP="${SYMBOL}-bookTicker-${DATE}.zip"
+                URL="https://data.binance.vision/data/futures/um/daily/bookTicker/${SYMBOL}/${ZIP}"
+                ;;
+              indexPriceKlines)
+                ZIP="${SYMBOL}-indexPriceKlines-1d-${DATE}.zip"
+                URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${ZIP}"
+                ;;
+              metrics)
+                ZIP="${SYMBOL}-${DATE}.zip"
+                URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
+                ;;
+            esac
 
-          for Q in "${quarters[@]}"; do
-            QDIR="${LIST_URL}${Q}/"
-            echo "  → Quarter $Q"
-            files=(
-              $(curl -s "$QDIR" \
-                | grep -oP '(?<=href=")[^"]+\.zip' || true)
-            )
-            for F in "${files[@]}"; do
-              # Datum aus Dateinamen (YYYY-MM-DD)
-              DATE=$(echo "$F" | grep -oP '[0-9]{4}-[0-9]{2}-[0-9]{2}' || true)
-              [[ -z "$DATE" ]] && continue
-              # nur im Zeitbereich
-              if [[ "$DATE" < "$START" || "$DATE" > "$END" ]]; then
-                continue
-              fi
-              ZIP="$F"
-              URL="${QDIR}${ZIP}"
-              echo "    → Fetching $ZIP"
-              if curl -sSf "$URL" -o "$BASE/$ZIP"; then
-                unzip -o "$BASE/$ZIP" -d "$BASE" && rm "$BASE/$ZIP"
-                echo "       ✅ unpacked $ZIP"
-              else
-                echo "       ⚠️ missing $ZIP"
-              fi
-            done
+            echo "→ Fetching $CATEGORY $DATE"
+            if curl -sSf "$URL" -o "$BASE/$ZIP"; then
+              unzip -o "$BASE/$ZIP" -d "$BASE" && rm "$BASE/$ZIP"
+              echo "   ✅ unpacked $ZIP"
+            else
+              echo "   ⚠️ missing $ZIP"
+            fi
+
+            cur=$(date -I -d "$cur +1 day")
           done
 
       - name: 📦 Upload artifact
