@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 2
+      max-parallel: 6
 
     steps:
       - name: 🛎️ Checkout repo
@@ -72,15 +72,14 @@ jobs:
         with:
           path: data-artifacts
 
-      - name: 🔀 Merge metrics into repo
+      - name: 🔀 Merge metrics into historical_tech
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p data/futures/um/daily/metrics
+          mkdir -p historical_tech/metrics
           find data-artifacts -type f | while read src; do
-            # src = data-artifacts/data/futures/um/daily/metrics/...
-            rel=${src#data-artifacts/data/}
-            dst="data/${rel}"
+            rel=${src#data-artifacts/data/futures/um/daily/metrics/}
+            dst="historical_tech/metrics/${rel}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
           done
@@ -92,7 +91,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add data/futures/um/daily/metrics
+          git add historical_tech/metrics
           if git diff --cached --quiet; then
             echo "✅ No new metrics to commit"
           else
