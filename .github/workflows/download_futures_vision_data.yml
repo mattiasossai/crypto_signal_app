@@ -1,6 +1,6 @@
-# .github/workflows/download_futures_data_no_bookDepth.yml
+# .github/workflows/download_futures_daily.yml
 
-name: 📥 Download & Commit Futures Data (ohne bookDepth)
+name: 📥 Download & Commit Daily Futures Data
 
 on:
   workflow_dispatch:
@@ -19,36 +19,83 @@ jobs:
       - name: 🛎️ Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🔧 Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip curl
+      - name: 🔧 Install unzip & curl
+        run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📥 Download & Unpack ${{ matrix.category }} for ${{ matrix.symbol }}
+      - name: 📥 Download & unpack ${{ matrix.category }} / ${{ matrix.symbol }}
         shell: bash
         run: |
           set -euo pipefail
+
           CATEGORY=${{ matrix.category }}
           SYMBOL=${{ matrix.symbol }}
           START="2020-01-01"
           END=$(date -I -d "yesterday")
-          TARGET="data/futures/um/daily/${CATEGORY}/${SYMBOL}"
-          mkdir -p "$TARGET"
+          BASE="data/futures/um/daily/${CATEGORY}/${SYMBOL}"
+          mkdir -p "$BASE"
 
-          cur="$START"
-          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-            DATE=$(date -d "$cur" +%Y-%m-%d)
-            ZIP="${SYMBOL}-${CATEGORY}-${DATE}.zip"
-            URL="https://data.binance.vision/data/futures/um/daily/${CATEGORY}/${SYMBOL}/${ZIP}"
-            echo "→ Fetching $URL"
-            if curl -sSf "$URL" -o "$TARGET/$ZIP"; then
-              unzip -o "$TARGET/$ZIP" -d "$TARGET"
-              rm "$TARGET/$ZIP"
-              echo "   ✅ unpacked $ZIP"
-            else
-              echo "   ⚠️ no file for $DATE"
-            fi
-            cur=$(date -I -d "$cur +1 day")
+          # 1) indexPriceKlines → einfacher Tages-Loop
+          if [[ "$CATEGORY" == "indexPriceKlines" ]]; then
+            cur="$START"
+            while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
+              DATE=$(date -d "$cur" +%Y-%m-%d)
+              ZIP="${SYMBOL}-indexPriceKlines-1d-${DATE}.zip"
+              URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${ZIP}"
+              echo "→ Fetching $ZIP"
+              if curl -sSf "$URL" -o "$BASE/$ZIP"; then
+                unzip -o "$BASE/$ZIP" -d "$BASE" && rm "$BASE/$ZIP"
+                echo "   ✅ unpacked $ZIP"
+              else
+                echo "   ⚠️ missing $ZIP"
+              fi
+              cur=$(date -I -d "$cur +1 day")
+            done
+            exit 0
+          fi
+
+          # 2) metrics, aggTrades & bookTicker → Quarter-Verzeichnisse
+          echo "→ Listing quarters for $CATEGORY/$SYMBOL"
+          # HTML parse href="SYMBOL_YYMMDD/"
+          quarters=(
+            $(curl -s "https://data.binance.vision/data/futures/um/daily/${CATEGORY}/${SYMBOL}/" \
+              | grep -oP '(?<=href=")'${SYMBOL}'_[0-9]{6}(?=/")')
+          )
+          for Q in "${quarters[@]}"; do
+            QDIR="https://data.binance.vision/data/futures/um/daily/${CATEGORY}/${SYMBOL}/${Q}/"
+            echo "  → Quarter $Q"
+            # liste alle ZIP-Dateien im Quarter
+            files=(
+              $(curl -s "$QDIR" \
+                | grep -oP "${SYMBOL}-${CATEGORY}-[0-9]{4}-[0-9]{2}-[0-9]{2}\.zip" \
+                  || grep -oP "${SYMBOL}-[0-9]{4}-[0-9]{2}-[0-9]{2}\.zip")
+            )
+            for F in "${files[@]}"; do
+              # DATE extrahieren (YYYY-MM-DD)
+              if [[ "$CATEGORY" == "metrics" ]]; then
+                # metrics zips heißen SYMBOL-YYYY-MM-DD.zip
+                DATE=$(echo $F | grep -oP '[0-9]{4}-[0-9]{2}-[0-9]{2}')
+                ZIP="$F"
+                URL="${QDIR}${ZIP}"
+              else
+                # aggTrades/bookTicker: SYMBOL-CATEGORY-YYYY-MM-DD.zip
+                DATE=$(echo $F | grep -oP '[0-9]{4}-[0-9]{2}-[0-9]{2}')
+                ZIP="$F"
+                URL="${QDIR}${ZIP}"
+              fi
+
+              # Filter auf unseren Zeitraum
+              if [[ "$DATE" < "$START" || "$DATE" > "$END" ]]; then
+                continue
+              fi
+
+              echo "    → Fetching $ZIP"
+              if curl -sSf "$URL" -o "$BASE/$ZIP"; then
+                unzip -o "$BASE/$ZIP" -d "$BASE" && rm "$BASE/$ZIP"
+                echo "       ✅ unpacked $ZIP"
+              else
+                echo "       ⚠️ missing $ZIP"
+              fi
+            done
           done
 
       - name: 📦 Upload artifact
@@ -58,7 +105,7 @@ jobs:
           path: data/futures/um/daily/${{ matrix.category }}/${{ matrix.symbol }}/*
 
   aggregate_and_push:
-    name: 🚀 Aggregate & Commit All Futures Data
+    name: 🚀 Aggregate & Commit All Daily Data
     runs-on: ubuntu-latest
     needs: download
 
@@ -81,9 +128,9 @@ jobs:
           mkdir -p data/futures/um/daily
           find data-artifacts -type f | while read src; do
             rel=${src#data-artifacts/}
-            dest="data/${rel}"
-            mkdir -p "$(dirname "$dest")"
-            mv "$src" "$dest"
+            dst="data/${rel}"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
           done
 
       - name: 🚀 Commit & Push
@@ -95,8 +142,8 @@ jobs:
           git reset --mixed origin/main
           git add data/futures/um/daily
           if git diff --cached --quiet; then
-            echo "✅ No new data to commit"
+            echo "✅ No new daily data to commit"
           else
-            git commit -m "chore(data): import futures vision data (ohne bookDepth) [skip ci]"
+            git commit -m "chore(data): import daily futures data [skip ci]"
             git push origin HEAD:main
           fi
