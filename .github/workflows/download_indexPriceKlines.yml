@@ -26,23 +26,24 @@ jobs:
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
+          # wir laden nach wie vor ab 2020-01-01 bis gestern
           START="2020-01-01"
           END=$(date -I -d "yesterday")
-          # Wähle die Timeframes, die zu eurer Multi-Timeframe-Logik passen:
           INTERVALS=( "1h" "4h" )
 
           for iv in "${INTERVALS[@]}"; do
             BASE="data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}"
             mkdir -p "$BASE"
+            echo "→ Downloading indexPriceKlines for $SYMBOL at interval $iv"
             cur="$START"
-            echo "→ Downloading indexPriceKlines for $SYMBOL @ $iv from $START to $END"
             while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
               DATE=$(date -d "$cur" +%Y-%m-%d)
-              ZIP="${SYMBOL}-indexPriceKlines-${iv}-${DATE}.zip"
+              ZIP="${SYMBOL}-${iv}-${DATE}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
               echo "    → Fetching $ZIP"
               if curl -sSf "$URL" -o tmp.zip; then
-                unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
+                unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
+                rm tmp.zip
                 echo "       ✅ extracted ${ZIP}"
               else
                 echo "       ⚠️ missing ${ZIP}"
