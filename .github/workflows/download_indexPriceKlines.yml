@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 2
+      max-parallel: 6
 
     steps:
       - name: 🛎️ Checkout repo
@@ -81,15 +81,14 @@ jobs:
         with:
           path: data-artifacts
 
-      - name: 🔀 Merge indexPriceKlines into repo
+      - name: 🔀 Merge indexPriceKlines into historical_tech
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p data/futures/um/daily/indexPriceKlines
+          mkdir -p historical_tech/indexPriceKlines
           find data-artifacts -type f | while read src; do
-            # src = data-artifacts/data/futures/um/daily/indexPriceKlines/...
-            rel=${src#data-artifacts/data/}
-            dst="data/${rel}"
+            rel=${src#data-artifacts/data/futures/um/daily/indexPriceKlines/}
+            dst="historical_tech/indexPriceKlines/${rel}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
           done
@@ -101,7 +100,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add data/futures/um/daily/indexPriceKlines
+          git add historical_tech/indexPriceKlines
           if git diff --cached --quiet; then
             echo "✅ No new indexPriceKlines to commit"
           else
