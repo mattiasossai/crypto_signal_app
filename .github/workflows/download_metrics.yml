@@ -1,3 +1,5 @@
+# .github/workflows/download_metrics.yml
+
 name: 📥 Download & Commit metrics
 
 on:
@@ -19,19 +21,20 @@ jobs:
       - name: 🔧 Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📥 Download & extract metrics
+      - name: 📥 Download & extract metrics (ab 2021-12-01)
         shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          START="2021-12-01"           # ← earliest available
+          START="2021-12-01"
           END=$(date -I -d "yesterday")
           BASE="data/futures/um/daily/metrics/${SYMBOL}"
           mkdir -p "$BASE"
+
           cur="$START"
           while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
             DATE=$(date -d "$cur" +%Y-%m-%d)
-            ZIP="${SYMBOL}-${DATE}.zip"
+            ZIP="${SYMBOL}-metrics-${DATE}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
             echo "→ Fetching metrics $DATE"
             if curl -sSf "$URL" -o tmp.zip; then
