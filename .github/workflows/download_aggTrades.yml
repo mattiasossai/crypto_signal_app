@@ -1,0 +1,98 @@
+name: 📥 Download & Commit aggTrades
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download:
+    name: ⬇️ Download aggTrades | ${{ matrix.symbol }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 2
+
+    steps:
+      - name: 🛎️ Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🔧 Install unzip & curl
+        run: sudo apt-get update && sudo apt-get install -y unzip curl
+
+      - name: 📥 Download & extract aggTrades
+        shell: bash
+        run: |
+          set -euo pipefail
+          SYMBOL=${{ matrix.symbol }}
+          START="2020-01-01"
+          END=$(date -I -d "yesterday")
+          BASE="data/futures/um/daily/aggTrades/${SYMBOL}"
+          mkdir -p "$BASE"
+          cur="$START"
+          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
+            DATE=$(date -d "$cur" +%Y-%m-%d)
+            ZIP="${SYMBOL}-aggTrades-${DATE}.zip"
+            URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
+            echo "→ Fetching aggTrades $DATE"
+            if curl -sSf "$URL" -o tmp.zip; then
+              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
+              echo "   ✅ extracted ${ZIP}"
+            else
+              echo "   ⚠️ missing ${ZIP}"
+              rm -f tmp.zip || true
+            fi
+            cur=$(date -I -d "$cur +1 day")
+          done
+          echo "📊 Disk usage after aggTrades download:"
+          df -h .
+          du -sh "$BASE" || true
+
+      - name: 📦 Upload aggTrades artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-aggTrades-${{ matrix.symbol }}
+          path: data/futures/um/daily/aggTrades/${{ matrix.symbol }}/*
+
+  aggregate_and_push:
+    name: 🚀 Aggregate & Commit aggTrades Data
+    needs: download
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout fresh
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: 📥 Download aggTrades artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: data-artifacts
+
+      - name: 🔀 Merge aggTrades into repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data/futures/um/daily/aggTrades
+          find data-artifacts -type f | while read src; do
+            rel=${src#data-artifacts/}
+            dst="data/${rel}"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
+          done
+
+      - name: 🚀 Commit & Push aggTrades
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --mixed origin/main
+          git add data/futures/um/daily/aggTrades
+          if git diff --cached --quiet; then
+            echo "✅ No new aggTrades to commit"
+          else
+            git commit -m "chore(data): import aggTrades [skip ci]"
+            git push origin HEAD:main
+          fi
