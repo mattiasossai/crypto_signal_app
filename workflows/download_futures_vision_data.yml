@@ -1,0 +1,100 @@
+# .github/workflows/download_futures_vision_data.yml
+
+name: 📥 Download & Commit Historical Futures Data
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download:
+    name: ⬇️ Download ${{ matrix.category }} | ${{ matrix.symbol }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        category: [bookDepth, aggTrades, bookTicker, indexPriceKlines, metrics]
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 10
+
+    steps:
+      - name: 🛎️ Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🔧 Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip curl
+
+      - name: 📥 Download & Unpack ${{ matrix.category }} for ${{ matrix.symbol }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CATEGORY=${{ matrix.category }}
+          SYMBOL=${{ matrix.symbol }}
+          START="2020-01-01"
+          END=$(date -I -d "yesterday")
+          TARGET="data/futures/um/daily/${CATEGORY}/${SYMBOL}"
+          mkdir -p "$TARGET"
+
+          cur="$START"
+          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
+            DATE=$(date -d "$cur" +%Y-%m-%d)
+            ZIP="${SYMBOL}-${CATEGORY}-${DATE}.zip"
+            URL="https://data.binance.vision/data/futures/um/daily/${CATEGORY}/${SYMBOL}/${ZIP}"
+            echo "→ Fetching $URL"
+            if curl -sSf "$URL" -o "$TARGET/$ZIP"; then
+              unzip -o "$TARGET/$ZIP" -d "$TARGET"
+              rm "$TARGET/$ZIP"
+              echo "   ✅ unpacked $ZIP"
+            else
+              echo "   ⚠️ no file for $DATE"
+            fi
+            cur=$(date -I -d "$cur +1 day")
+          done
+
+      - name: 📦 Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-${{ matrix.category }}-${{ matrix.symbol }}
+          path: data/futures/um/daily/${{ matrix.category }}/${{ matrix.symbol }}/*
+
+  aggregate_and_push:
+    name: 🚀 Aggregate & Commit All Futures Data
+    runs-on: ubuntu-latest
+    needs: download
+
+    steps:
+      - name: 🛎️ Checkout fresh
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: 📥 Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: data-artifacts
+
+      - name: 🔀 Merge into repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data/futures/um/daily
+          find data-artifacts -type f | while read src; do
+            rel=${src#data-artifacts/}
+            dest="data/${rel}"
+            mkdir -p "$(dirname "$dest")"
+            mv "$src" "$dest"
+          done
+
+      - name: 🚀 Commit & Push
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --mixed origin/main
+          git add data/futures/um/daily
+          if git diff --cached --quiet; then
+            echo "✅ No new data to commit"
+          else
+            git commit -m "chore(data): import binance vision historical futures data [skip ci]"
+            git push origin HEAD:main
+          fi
