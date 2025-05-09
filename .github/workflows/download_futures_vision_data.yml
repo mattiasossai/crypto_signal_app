@@ -13,7 +13,7 @@ jobs:
       matrix:
         category: [aggTrades, bookTicker, indexPriceKlines, metrics]
         symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 8
+      max-parallel: 2      # ◀️ nur 2 Jobs gleichzeitig
 
     steps:
       - name: 🛎️ Checkout repo
@@ -22,7 +22,7 @@ jobs:
       - name: 🔧 Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📥 Download & unpack ${{ matrix.category }} / ${{ matrix.symbol }}
+      - name: 📥 Download & extract ${{ matrix.category }} / ${{ matrix.symbol }}
         shell: bash
         run: |
           set -euo pipefail
@@ -34,41 +34,51 @@ jobs:
           BASE="data/futures/um/daily/${CATEGORY}/${SYMBOL}"
           mkdir -p "$BASE"
 
+          # für jede Tages-ZIP
           cur="$START"
           while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
             DATE=$(date -d "$cur" +%Y-%m-%d)
 
+            # ZIP-Name & URL je Kategorie
             case "$CATEGORY" in
               aggTrades)
                 ZIP="${SYMBOL}-aggTrades-${DATE}.zip"
+                PATH_IN_ZIP="${SYMBOL}-aggTrades-${DATE}.csv"
                 URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
                 ;;
               bookTicker)
                 ZIP="${SYMBOL}-bookTicker-${DATE}.zip"
+                PATH_IN_ZIP="${SYMBOL}-bookTicker-${DATE}.csv"
                 URL="https://data.binance.vision/data/futures/um/daily/bookTicker/${SYMBOL}/${ZIP}"
                 ;;
               indexPriceKlines)
                 ZIP="${SYMBOL}-indexPriceKlines-1d-${DATE}.zip"
+                PATH_IN_ZIP="${SYMBOL}-indexPriceKlines-1d-${DATE}.csv"
                 URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${ZIP}"
                 ;;
               metrics)
                 ZIP="${SYMBOL}-${DATE}.zip"
+                PATH_IN_ZIP="${SYMBOL}-${DATE}.csv"
                 URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
                 ;;
             esac
 
             echo "→ Fetching $CATEGORY $DATE"
-            if curl -sSf "$URL" -o "$BASE/$ZIP"; then
-              unzip -o "$BASE/$ZIP" -d "$BASE" && rm "$BASE/$ZIP"
-              echo "   ✅ unpacked $ZIP"
+            # 1) Download ZIP nur temporär
+            if curl -sSf "$URL" -o tmp.zip; then
+              # 2) Extract CSV direkt, dann löschen ZIP
+              unzip -p tmp.zip "$PATH_IN_ZIP" > "$BASE/${PATH_IN_ZIP}" \
+              && rm tmp.zip
+              echo "   ✅ extracted ${PATH_IN_ZIP}"
             else
               echo "   ⚠️ missing $ZIP"
+              rm -f tmp.zip || true
             fi
 
             cur=$(date -I -d "$cur +1 day")
           done
 
-      - name: 📦 Upload artifact
+      - name: 📦 Upload all extracted files
         uses: actions/upload-artifact@v4
         with:
           name: data-${{ matrix.category }}-${{ matrix.symbol }}
@@ -86,7 +96,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: 📥 Download all artifacts
+      - name: 📥 Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: data-artifacts
