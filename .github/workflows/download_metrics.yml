@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          START="2020-01-01"
+          START="2021-12-01"           # ← earliest available
           END=$(date -I -d "yesterday")
           BASE="data/futures/um/daily/metrics/${SYMBOL}"
           mkdir -p "$BASE"
@@ -43,6 +43,7 @@ jobs:
             fi
             cur=$(date -I -d "$cur +1 day")
           done
+
           echo "📊 Disk usage after metrics download:"
           df -h .
           du -sh "$BASE" || true
