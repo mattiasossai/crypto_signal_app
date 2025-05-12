@@ -2,6 +2,9 @@ name: 📥 Download & Commit indexPriceKlines (1h & 4h)
 
 on:
   workflow_dispatch:
+  schedule:
+    # täglich 02:00 UTC
+    - cron: '0 2 * * *'
 
 jobs:
   download:
@@ -13,33 +16,42 @@ jobs:
       max-parallel: 6
 
     steps:
-      - name: ️ Checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: Download & extract indexPriceKlines (1h & 4h)
+      - name: Download & extract indexPriceKlines (Backfill)
         shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          # Dynamisches Datum: 1. des Monats bis gestern
           YESTERDAY=$(date -I -d "yesterday")
-          START=$(date -d "$YESTERDAY" '+%Y-%m-01')
-          END="$YESTERDAY"
           INTERVALS=( "1h" "4h" )
 
           for iv in "${INTERVALS[@]}"; do
+            # determine start per interval
+            TARGET_DIR="historical_tech/indexPriceKlines/${SYMBOL}/${iv}"
+            if compgen -G "$TARGET_DIR/${SYMBOL}-${iv}-*.csv" > /dev/null; then
+              LAST=$(find "$TARGET_DIR" -type f -name "${SYMBOL}-${iv}-*.csv" \
+                | sed -E "s/.*${SYMBOL}-${iv}-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
+                | sort | tail -n1)
+              START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
+            else
+              START="$YESTERDAY"
+            fi
+            END="$YESTERDAY"
+
             BASE="data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}"
             mkdir -p "$BASE"
-            echo "→ Downloading indexPriceKlines for $SYMBOL at interval $iv"
+
             cur="$START"
             while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-              DATE=$(date -d "$cur" +%Y-%m-%d)
+              DATE="$cur"
               ZIP="${SYMBOL}-${iv}-${DATE}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
-              echo " → Fetching $ZIP"
+              echo "→ Fetching $ZIP"
               if curl -sSf "$URL" -o tmp.zip; then
                 unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
                 rm tmp.zip
@@ -50,12 +62,6 @@ jobs:
               fi
               cur=$(date -I -d "$cur +1 day")
             done
-          done
-
-          echo " Disk usage after indexPriceKlines download:"
-          df -h .
-          for iv in "${INTERVALS[@]}"; do
-            du -sh "data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}" || true
           done
 
       - name: Upload indexPriceKlines artifacts
@@ -72,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: ️ Checkout fresh
+      - name: Checkout fresh
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -106,6 +112,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "✅ No new indexPriceKlines to commit"
           else
-            git commit -m "chore(data): import indexPriceKlines 1h & 4h [skip ci]"
+            git commit -m "chore(data): backfill indexPriceKlines ${START}→${END} [skip ci]"
             git push origin HEAD:main
           fi
