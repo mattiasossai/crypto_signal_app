@@ -1,98 +1,60 @@
-name: 📥 Download & Commit aggTrades
+name: 📥 Backfill aggTrades → Feature Extraction
 
 on:
   workflow_dispatch:
 
 jobs:
-  download:
-    name: ⬇️ Download aggTrades | ${{ matrix.symbol }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 2
+  backfill-aggTrades:
+    runs-on: [self-hosted, linux]
 
     steps:
-      - name: 🛎️ Checkout repo
-        uses: actions/checkout@v3
-
-      - name: 🔧 Install unzip & curl
-        run: sudo apt-get update && sudo apt-get install -y unzip curl
-
-      - name: 📥 Download & extract aggTrades
-        shell: bash
-        run: |
-          set -euo pipefail
-          SYMBOL=${{ matrix.symbol }}
-          START="2020-01-01"
-          END=$(date -I -d "yesterday")
-          BASE="data/futures/um/daily/aggTrades/${SYMBOL}"
-          mkdir -p "$BASE"
-          cur="$START"
-          while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-            DATE=$(date -d "$cur" +%Y-%m-%d)
-            ZIP="${SYMBOL}-aggTrades-${DATE}.zip"
-            URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
-            echo "→ Fetching aggTrades $DATE"
-            if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
-              echo "   ✅ extracted ${ZIP}"
-            else
-              echo "   ⚠️ missing ${ZIP}"
-              rm -f tmp.zip || true
-            fi
-            cur=$(date -I -d "$cur +1 day")
-          done
-          echo "📊 Disk usage after aggTrades download:"
-          df -h .
-          du -sh "$BASE" || true
-
-      - name: 📦 Upload aggTrades artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: data-aggTrades-${{ matrix.symbol }}
-          path: data/futures/um/daily/aggTrades/${{ matrix.symbol }}/*
-
-  aggregate_and_push:
-    name: 🚀 Aggregate & Commit aggTrades Data
-    needs: download
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 🛎️ Checkout fresh
-        uses: actions/checkout@v3
+      # 1) Vollständiges Repo auschecken (samt scripts/ und historical_tech/)
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
 
-      - name: 📥 Download aggTrades artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: data-artifacts
-
-      - name: 🔀 Merge aggTrades into repo
-        shell: bash
+      # 2) Python & Abhängigkeiten installieren
+      - name: Setup Python & Dependencies
         run: |
-          set -euo pipefail
-          mkdir -p data/futures/um/daily/aggTrades
-          find data-artifacts -type f | while read src; do
-            rel=${src#data-artifacts/}
-            dst="data/${rel}"
-            mkdir -p "$(dirname "$dst")"
-            mv "$src" "$dst"
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          pip3 install --upgrade pip
+          pip3 install pandas numpy pyarrow
+
+      # 3) Rohdaten herunterladen & entpacken in /tmp
+      - name: Download & unzip aggTrades
+        run: |
+          mkdir -p /tmp/agg
+          cd /tmp/agg
+          SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT ADAUSDT SOLUSDT XRPUSDT)
+          for S in "${SYMBOLS[@]}"; do
+            ZIP="${S}-aggTrades-$(date +%F).zip"
+            URL="https://data.binance.vision/data/futures/aggTrades/${S}/${ZIP}"
+            echo "Downloading $URL"
+            wget -q "$URL" -O "$ZIP" || { echo "ERROR downloading $ZIP"; exit 1; }
+            unzip -o "$ZIP" -d "$S"
           done
 
-      - name: 🚀 Commit & Push aggTrades
-        shell: bash
+      # 4) Feature-Extraktion mit unserem Skript
+      - name: Extract aggTrades Features
+        run: |
+          mkdir -p historical_tech/aggTrades/features
+          python3 scripts/extract_aggTrades_features.py \
+            --input-dir /tmp/agg \
+            --output-file historical_tech/aggTrades/features/aggTrades_$(date +%F).parquet
+
+      # 5) Rohdaten löschen (Cleanup)
+      - name: Clean up raw data
+        run: rm -rf /tmp/agg
+
+      # 6) Kompakte Features committen & pushen
+      - name: Commit & Push Features
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --mixed origin/main
-          git add data/futures/um/daily/aggTrades
-          if git diff --cached --quiet; then
-            echo "✅ No new aggTrades to commit"
-          else
-            git commit -m "chore(data): import aggTrades [skip ci]"
-            git push origin HEAD:main
-          fi
+          git add historical_tech/aggTrades/features/*.parquet
+          git diff --cached --quiet || git commit -m "aggTrades Features $(date +%F)"
+          git push origin HEAD:main
