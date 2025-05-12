@@ -13,19 +13,21 @@ jobs:
       max-parallel: 6
 
     steps:
-      - name: 🛎️ Checkout repo
+      - name: ️ Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🔧 Install unzip & curl
+      - name: Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📥 Download & extract metrics (ab 2021-12-01)
+      - name: Download & extract metrics
         shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          START="2021-12-01"
-          END=$(date -I -d "yesterday")
+          # Dynamisches Datum: 1. des Monats bis gestern
+          YESTERDAY=$(date -I -d "yesterday")
+          START=$(date -d "$YESTERDAY" '+%Y-%m-01')
+          END="$YESTERDAY"
           BASE="data/futures/um/daily/metrics/${SYMBOL}"
           mkdir -p "$BASE"
 
@@ -36,43 +38,44 @@ jobs:
             URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
             echo "→ Fetching metrics $DATE"
             if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv" && rm tmp.zip
-              echo "   ✅ extracted ${ZIP}"
+              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
+              rm tmp.zip
+              echo " ✅ extracted ${ZIP}"
             else
-              echo "   ⚠️ missing ${ZIP}"
+              echo " ⚠️ missing ${ZIP}"
               rm -f tmp.zip || true
             fi
             cur=$(date -I -d "$cur +1 day")
           done
 
-          echo "📊 Disk usage after metrics download:"
+          echo " Disk usage after metrics download:"
           df -h .
           du -sh "$BASE" || true
 
-      - name: 📦 Upload metrics artifact
+      - name: Upload metrics artifact
         uses: actions/upload-artifact@v4
         with:
           name: data-metrics-${{ matrix.symbol }}
           path: data/futures/um/daily/metrics/${{ matrix.symbol }}/*
 
   aggregate_and_push:
-    name: 🚀 Aggregate & Commit metrics Data
+    name: Aggregate & Commit metrics Data
     needs: download
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🛎️ Checkout fresh
+      - name: ️ Checkout fresh
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: 📥 Download metrics artifacts
+      - name: Download metrics artifacts
         uses: actions/download-artifact@v4
         with:
           path: data-artifacts
 
-      - name: 🔀 Merge metrics into historical_tech
+      - name: Merge metrics into historical_tech
         shell: bash
         run: |
           set -euo pipefail
@@ -84,7 +87,7 @@ jobs:
             mv "$src" "$dst"
           done
 
-      - name: 🚀 Commit & Push metrics
+      - name: Commit & Push metrics
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
