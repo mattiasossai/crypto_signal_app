@@ -15,6 +15,17 @@ on:
 jobs:
   backfill-aggTrades:
     runs-on: [self-hosted, linux]
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - name: btc_ena
+            symbols: [BTCUSDT, ENAUSDT]
+          - name: eth_sol
+            symbols: [ETHUSDT, SOLUSDT]
+          - name: bnb_xrp
+            symbols: [BNBUSDT, XRPUSDT]
 
     steps:
       - name: Checkout repo
@@ -34,7 +45,7 @@ jobs:
           pip install --upgrade pip
           pip install pandas numpy pyarrow
 
-      - name: Download & unzip aggTrades
+      - name: Download & unzip aggTrades for ${{ matrix.name }}
         run: |
           START="${{ github.event.inputs.start_date }}"
           END="${{ github.event.inputs.end_date }}"
@@ -43,40 +54,45 @@ jobs:
           mkdir -p /tmp/agg
           cd /tmp/agg
 
-          # Korrigierte Symbol-Liste: ENAUSDT statt ADAUSDT
-          SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT ENAUSDT SOLUSDT XRPUSDT)
-          current="$START"
-          while [[ "$current" < "$END" ]] || [[ "$current" == "$END" ]]; do
-            for S in "${SYMBOLS[@]}"; do
+          for S in "${{ matrix.symbols[@] }}"; do
+            mkdir -p "$S"
+            current="$START"
+            while [[ "$current" < "$END" ]] || [[ "$current" == "$END" ]]; do
               ZIP="${S}-aggTrades-${current}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${S}/${ZIP}"
               echo "Downloading $URL"
-              if wget -q "$URL" -O "$ZIP"; then
-                unzip -o "$ZIP" -d "$S"
+              if wget -q "$URL" -O "${S}/${ZIP}"; then
+                unzip -o "${S}/${ZIP}" -d "${S}"
               else
                 echo "WARNING: $ZIP not found, skipping"
               fi
+              current=$(date --date="$current + 1 day" +%F)
             done
-            current=$(date --date="$current + 1 day" +%F)
           done
 
-      - name: Extract aggTrades Features
+      - name: Extract aggTrades Features for ${{ matrix.name }}
         run: |
           . .venv/bin/activate
-          mkdir -p historical_tech/aggTrades/features
-          python scripts/extract_aggTrades_features.py \
-            --input-dir /tmp/agg \
-            --output-file historical_tech/aggTrades/features/aggTrades_${START}_to_${END}.parquet
+          for S in "${{ matrix.symbols[@] }}"; do
+            mkdir -p historical_tech/aggTrades/features/"$S"
+            python scripts/extract_aggTrades_features.py \
+              --input-dir /tmp/agg/"$S" \
+              --output-file historical_tech/aggTrades/features/"$S"/aggTrades_"$S"_"${START}_to_${END}".parquet
+          done
 
-      - name: Clean up raw data
+      - name: Clean up raw data for ${{ matrix.name }}
         run: rm -rf /tmp/agg
 
-      - name: Commit & Push Features
+      - name: Commit & Push Features for ${{ matrix.name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add historical_tech/aggTrades/features/*.parquet
-          git diff --cached --quiet || git commit -m "aggTrades Features ${START}_to_${END}"
+          git fetch origin main
+          git rebase origin/main
+          for S in "${{ matrix.symbols[@] }}"; do
+            git add historical_tech/aggTrades/features/"$S"/*.parquet
+          done
+          git diff --cached --quiet || git commit -m "aggTrades Features ${{ matrix.symbols[0] }}+${{ matrix.symbols[1] }} ${START}_to_${END}"
           git push origin HEAD:main
