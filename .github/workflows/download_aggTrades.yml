@@ -13,13 +13,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Python & Dependencies
+      - name: Install system packages
         run: |
           sudo apt-get update
-          # unzip brauchtest du schon, außerdem pip3
-          sudo apt-get install -y unzip python3-pip
-          pip3 install --upgrade pip
-          pip3 install pandas numpy pyarrow
+          sudo apt-get install -y unzip python3-venv wget
+
+      - name: Create & activate Python venv
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install pandas numpy pyarrow
 
       - name: Download & unzip aggTrades
         run: |
@@ -36,8 +40,9 @@ jobs:
 
       - name: Extract aggTrades Features
         run: |
+          . .venv/bin/activate
           mkdir -p historical_tech/aggTrades/features
-          python3 scripts/extract_aggTrades_features.py \
+          python scripts/extract_aggTrades_features.py \
             --input-dir /tmp/agg \
             --output-file historical_tech/aggTrades/features/aggTrades_$(date +%F).parquet
 
