@@ -13,19 +13,21 @@ jobs:
       max-parallel: 6
 
     steps:
-      - name: 🛎️ Checkout repo
+      - name: ️ Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🔧 Install unzip & curl
+      - name: Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
-      - name: 📥 Download & extract indexPriceKlines (1h & 4h)
+      - name: Download & extract indexPriceKlines (1h & 4h)
         shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          START="2020-01-01"
-          END=$(date -I -d "yesterday")
+          # Dynamisches Datum: 1. des Monats bis gestern
+          YESTERDAY=$(date -I -d "yesterday")
+          START=$(date -d "$YESTERDAY" '+%Y-%m-01')
+          END="$YESTERDAY"
           INTERVALS=( "1h" "4h" )
 
           for iv in "${INTERVALS[@]}"; do
@@ -37,26 +39,26 @@ jobs:
               DATE=$(date -d "$cur" +%Y-%m-%d)
               ZIP="${SYMBOL}-${iv}-${DATE}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
-              echo "    → Fetching $ZIP"
+              echo " → Fetching $ZIP"
               if curl -sSf "$URL" -o tmp.zip; then
                 unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
                 rm tmp.zip
-                echo "       ✅ extracted ${ZIP}"
+                echo " ✅ extracted ${ZIP}"
               else
-                echo "       ⚠️ missing ${ZIP}"
+                echo " ⚠️ missing ${ZIP}"
                 rm -f tmp.zip || true
               fi
               cur=$(date -I -d "$cur +1 day")
             done
           done
 
-          echo "📊 Disk usage after indexPriceKlines download:"
+          echo " Disk usage after indexPriceKlines download:"
           df -h .
           for iv in "${INTERVALS[@]}"; do
             du -sh "data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}" || true
           done
 
-      - name: 📦 Upload indexPriceKlines artifacts
+      - name: Upload indexPriceKlines artifacts
         uses: actions/upload-artifact@v4
         with:
           name: data-indexPriceKlines-${{ matrix.symbol }}
@@ -65,23 +67,23 @@ jobs:
             data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/4h/*
 
   aggregate_and_push:
-    name: 🚀 Aggregate & Commit indexPriceKlines Data
+    name: Aggregate & Commit indexPriceKlines Data
     needs: download
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🛎️ Checkout fresh
+      - name: ️ Checkout fresh
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: 📥 Download indexPriceKlines artifacts
+      - name: Download indexPriceKlines artifacts
         uses: actions/download-artifact@v4
         with:
           path: data-artifacts
 
-      - name: 🔀 Merge indexPriceKlines into historical_tech
+      - name: Merge indexPriceKlines into historical_tech
         shell: bash
         run: |
           set -euo pipefail
@@ -93,7 +95,7 @@ jobs:
             mv "$src" "$dst"
           done
 
-      - name: 🚀 Commit & Push indexPriceKlines
+      - name: Commit & Push indexPriceKlines
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
