@@ -14,23 +14,19 @@ on:
 
 jobs:
   backfill-aggTrades:
-    # läuft auf deinem Self-Hosted Runner
     runs-on: [self-hosted, linux]
 
     steps:
-      # 1) Checkout des vollständigen Repos
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2) System-Pakete
       - name: Install system packages
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip python3-venv wget
 
-      # 3) Python-venv erstellen und Abhängigkeiten installieren
       - name: Create & activate Python venv
         run: |
           python3 -m venv .venv
@@ -38,10 +34,8 @@ jobs:
           pip install --upgrade pip
           pip install pandas numpy pyarrow
 
-      # 4) Download & Unzip aller aggTrades-ZIPs von start_date bis end_date (bzw. gestern)
       - name: Download & unzip aggTrades
         run: |
-          # Inputs lesen, end_date default auf gestern setzen
           START="${{ github.event.inputs.start_date }}"
           END="${{ github.event.inputs.end_date }}"
           if [ -z "$END" ]; then END=$(date --date="yesterday" +%F); fi
@@ -49,13 +43,12 @@ jobs:
           mkdir -p /tmp/agg
           cd /tmp/agg
 
-          SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT ADAUSDT SOLUSDT XRPUSDT)
+          # Korrigierte Symbol-Liste: ENAUSDT statt ADAUSDT
+          SYMBOLS=(BTCUSDT ETHUSDT BNBUSDT ENAUSDT SOLUSDT XRPUSDT)
           current="$START"
-          # Schleife über alle Tage
           while [[ "$current" < "$END" ]] || [[ "$current" == "$END" ]]; do
             for S in "${SYMBOLS[@]}"; do
               ZIP="${S}-aggTrades-${current}.zip"
-              # Neuer Pfad zu den UM-Futures
               URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${S}/${ZIP}"
               echo "Downloading $URL"
               if wget -q "$URL" -O "$ZIP"; then
@@ -67,7 +60,6 @@ jobs:
             current=$(date --date="$current + 1 day" +%F)
           done
 
-      # 5) Feature-Extraktion im venv
       - name: Extract aggTrades Features
         run: |
           . .venv/bin/activate
@@ -76,11 +68,9 @@ jobs:
             --input-dir /tmp/agg \
             --output-file historical_tech/aggTrades/features/aggTrades_${START}_to_${END}.parquet
 
-      # 6) Cleanup der Rohdaten
       - name: Clean up raw data
         run: rm -rf /tmp/agg
 
-      # 7) Kompakte Features committen & pushen
       - name: Commit & Push Features
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
