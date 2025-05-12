@@ -21,11 +21,11 @@ jobs:
       matrix:
         include:
           - name: btc_ena
-            symbols: [BTCUSDT, ENAUSDT]
+            symbols: ["BTCUSDT", "ENAUSDT"]
           - name: eth_sol
-            symbols: [ETHUSDT, SOLUSDT]
+            symbols: ["ETHUSDT", "SOLUSDT"]
           - name: bnb_xrp
-            symbols: [BNBUSDT, XRPUSDT]
+            symbols: ["BNBUSDT", "XRPUSDT"]
 
     steps:
       - name: Checkout repo
@@ -54,7 +54,8 @@ jobs:
           mkdir -p /tmp/agg
           cd /tmp/agg
 
-          for S in "${{ matrix.symbols[@] }}"; do
+          # join(matrix.symbols,' ') expandiert euer Array
+          for S in ${{ join(matrix.symbols, ' ') }}; do
             mkdir -p "$S"
             current="$START"
             while [[ "$current" < "$END" ]] || [[ "$current" == "$END" ]]; do
@@ -72,8 +73,12 @@ jobs:
 
       - name: Extract aggTrades Features for ${{ matrix.name }}
         run: |
+          START="${{ github.event.inputs.start_date }}"
+          END="${{ github.event.inputs.end_date }}"
+          if [ -z "$END" ]; then END=$(date --date="yesterday" +%F); fi
+
           . .venv/bin/activate
-          for S in "${{ matrix.symbols[@] }}"; do
+          for S in ${{ join(matrix.symbols, ' ') }}; do
             mkdir -p historical_tech/aggTrades/features/"$S"
             python scripts/extract_aggTrades_features.py \
               --input-dir /tmp/agg/"$S" \
@@ -87,12 +92,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          START="${{ github.event.inputs.start_date }}"
+          END="${{ github.event.inputs.end_date }}"
+          if [ -z "$END" ]; then END=$(date --date="yesterday" +%F); fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git rebase origin/main
-          for S in "${{ matrix.symbols[@] }}"; do
+
+          for S in ${{ join(matrix.symbols, ' ') }}; do
             git add historical_tech/aggTrades/features/"$S"/*.parquet
           done
-          git diff --cached --quiet || git commit -m "aggTrades Features ${{ matrix.symbols[0] }}+${{ matrix.symbols[1] }} ${START}_to_${END}"
+
+          git diff --cached --quiet || \
+            git commit -m "aggTrades Features ${{ matrix.name }} ${START}_to_${END}"
           git push origin HEAD:main
