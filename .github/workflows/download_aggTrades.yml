@@ -8,21 +8,19 @@ jobs:
     runs-on: [self-hosted, linux]
 
     steps:
-      # 1) Vollständiges Repo auschecken (samt scripts/ und historical_tech/)
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2) Python & Abhängigkeiten installieren
       - name: Setup Python & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip
+          # unzip brauchtest du schon, außerdem pip3
+          sudo apt-get install -y unzip python3-pip
           pip3 install --upgrade pip
           pip3 install pandas numpy pyarrow
 
-      # 3) Rohdaten herunterladen & entpacken in /tmp
       - name: Download & unzip aggTrades
         run: |
           mkdir -p /tmp/agg
@@ -36,7 +34,6 @@ jobs:
             unzip -o "$ZIP" -d "$S"
           done
 
-      # 4) Feature-Extraktion mit unserem Skript
       - name: Extract aggTrades Features
         run: |
           mkdir -p historical_tech/aggTrades/features
@@ -44,11 +41,9 @@ jobs:
             --input-dir /tmp/agg \
             --output-file historical_tech/aggTrades/features/aggTrades_$(date +%F).parquet
 
-      # 5) Rohdaten löschen (Cleanup)
       - name: Clean up raw data
         run: rm -rf /tmp/agg
 
-      # 6) Kompakte Features committen & pushen
       - name: Commit & Push Features
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
