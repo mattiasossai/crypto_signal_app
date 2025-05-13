@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
 extract_aggTrades_features.py
-
-… (Dokumentation unverändert) …
-
-Neu:
- - Bei komplett fehlenden CSVs wird **leise** übersprungen (kein Fehler).
+… unveränderte Dokumentation …
 """
+
 import argparse
 import os
 import glob
@@ -43,51 +40,52 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
     pattern = os.path.join(input_dir, '*.csv')
     files = sorted(glob.glob(pattern))
 
-    # Wenn gar keine CSVs da sind, skip ohne Fehler
     if not files:
-        print(f"[WARN] Keine CSVs in {input_dir} – überspringe Symbol.")
+        print(f"[WARN] Keine CSVs in {input_dir} – überspringe.")
         return
 
-    # CSVs ohne Header einlesen
-    cols = [
-        'aggTradeId','price','quantity','firstTradeId',
-        'lastTradeId','timestamp','isBuyerMaker','isBestMatch'
-    ]
-    df = pd.concat([
-        pd.read_csv(
+    # Nur die drei Spalten per Index lesen (7-col CSVs)
+    df_list = []
+    for f in files:
+        tmp = pd.read_csv(
             f,
             header=None,
-            names=cols,
-            usecols=['timestamp','quantity','isBuyerMaker'],
-            dtype={'timestamp': 'Int64','quantity':'float','isBuyerMaker':'bool'}
+            usecols=[5, 2, 6],                # timestamp, quantity, isBuyerMaker
+            dtype={5: 'Int64', 2: 'float', 6: 'bool'},
         )
-        for f in files
-    ], ignore_index=True)
+        tmp.columns = ['timestamp', 'quantity', 'isBuyerMaker']
+        df_list.append(tmp)
 
-    # Duplikate (Overlap) entfernen
+    df = pd.concat(df_list, ignore_index=True)
     df = df.drop_duplicates()
 
-    # Zeitfenster filtern (Millisekunden)
+    # Zeitfenster filtern
     start_ts = int(pd.to_datetime(start_date).timestamp() * 1000)
     end_ts = int((pd.to_datetime(end_date) + pd.Timedelta(days=1)
                   - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
     df = df[df['timestamp'].between(start_ts, end_ts)]
-
     if df.empty:
-        print(f"[WARN] Keine Trades im Zeitraum {start_date}–{end_date} für {input_dir}.")
+        print(f"[WARN] Keine Trades im Zeitraum {start_date}–{end_date}.")
         return
 
-    # Feature-Berechnung & Parquet-Export
+    # Features berechnen & schreiben
     features = compute_agg_features(df)
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     features.to_parquet(output_file, index=False)
     print(f"[OK] Wrote features to {output_file}")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Extract aggTrades Features per symbol")
-    parser.add_argument('--input-dir',   required=True, help="Folder with symbol CSVs")
-    parser.add_argument('--output-file', required=True, help="Parquet output path")
+    parser = argparse.ArgumentParser(
+        description="Extract aggTrades Features per symbol"
+    )
+    parser.add_argument('--input-dir',   required=True, help="CSV-Ordner")
+    parser.add_argument('--output-file', required=True, help="Ziel-Parquet")
     parser.add_argument('--start-date',  required=True, help="YYYY-MM-DD")
     parser.add_argument('--end-date',    required=True, help="YYYY-MM-DD")
     args = parser.parse_args()
-    main(args.input_dir, args.output_file, args.start_date, args.end_date)
+    main(
+        input_dir   = args.input_dir,
+        output_file = args.output_file,
+        start_date  = args.start_date,
+        end_date    = args.end_date
+    )
