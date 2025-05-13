@@ -63,11 +63,10 @@ jobs:
             *)              INCEP="$SD_GLOBAL" ;;
           esac
 
-          # 2) SD = max(global_start, inception)
-          #    Vergleich über Unix-Timestamps
+          # 2) SD = max(global_start, inception) per POSIX-Test
           t_global=$(date -d "$SD_GLOBAL" +%s)
           t_incep=$(date -d "$INCEP"     +%s)
-          if (( t_global < t_incep )); then
+          if [ "$t_global" -lt "$t_incep" ]; then
             SD="$INCEP"
           else
             SD="$SD_GLOBAL"
