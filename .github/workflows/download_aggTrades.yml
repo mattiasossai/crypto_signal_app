@@ -53,30 +53,33 @@ jobs:
           SD_GLOBAL=${{ steps.dates.outputs.global_start }}
           ED=${{ steps.dates.outputs.global_end }}
 
-          # Inception-Daten je Symbol
-          declare -A inception=(
-            [BTCUSDT]=2019-12-31
-            [ETHUSDT]=2019-12-31
-            [XRPUSDT]=2020-01-06
-            [BNBUSDT]=2020-02-10
-            [SOLUSDT]=2020-09-14
-            [ENAUSDT]=2024-04-02
-          )
-          # Wähle SD als max(global_start, inception)
-          INCEP=${inception[$SYMBOL]}
-          if [[ "$SD_GLOBAL" < "$INCEP" ]]; then
+          # 1) Inception-Datum wählen per case/esac
+          case "$SYMBOL" in
+            BTCUSDT|ETHUSDT) INCEP="2019-12-31" ;;
+            XRPUSDT)        INCEP="2020-01-06" ;;
+            BNBUSDT)        INCEP="2020-02-10" ;;
+            SOLUSDT)        INCEP="2020-09-14" ;;
+            ENAUSDT)        INCEP="2024-04-02" ;;
+            *)              INCEP="$SD_GLOBAL" ;;
+          esac
+
+          # 2) SD = max(global_start, inception)
+          #    Vergleich über Unix-Timestamps
+          t_global=$(date -d "$SD_GLOBAL" +%s)
+          t_incep=$(date -d "$INCEP"     +%s)
+          if (( t_global < t_incep )); then
             SD="$INCEP"
           else
             SD="$SD_GLOBAL"
           fi
 
-          # Overlap: einen Tag vor Block-Beginn laden
+          # 3) Overlap: einen Tag vor Block-Beginn laden
           SD_RAW=$(date -I -d "$SD -1 day")
 
+          # 4) Download & unzip
           RAW_DIR="data/aggTrades/$SYMBOL"
           mkdir -p "$RAW_DIR"
           CUR="$SD_RAW"
-          # Lade von SD_RAW bis einschließlich ED
           while [[ "$CUR" <= "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
