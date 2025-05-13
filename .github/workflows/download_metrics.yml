@@ -3,8 +3,8 @@ name: 📥 Download & Commit metrics
 on:
   workflow_dispatch:
   schedule:
-    # täglich 02:00 UTC
-    - cron: '0 2 * * *'
+    # täglich 05:00 UTC
+    - cron: '0 5 * * *'
 
 jobs:
   download:
@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
@@ -27,31 +27,18 @@ jobs:
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-
-          # yesterday
           YESTERDAY=$(date -I -d "yesterday")
-          TARGET_DIR="historical_tech/metrics/${SYMBOL}"
-          if compgen -G "$TARGET_DIR/${SYMBOL}-metrics-*.csv" > /dev/null; then
-            LAST=$(find "$TARGET_DIR" -type f -name "${SYMBOL}-metrics-*.csv" \
-              | sed -E "s/.*${SYMBOL}-metrics-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
-              | sort | tail -n1)
-            START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
-          else
-            START="$YESTERDAY"
-          fi
+          TARGET_DIR="data/futures/um/daily/metrics/${SYMBOL}"
+          mkdir -p "$TARGET_DIR"
+          START="$YESTERDAY"
           END="$YESTERDAY"
-
-          BASE="data/futures/um/daily/metrics/${SYMBOL}"
-          mkdir -p "$BASE"
-
           cur="$START"
           while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-            DATE="$cur"
-            ZIP="${SYMBOL}-metrics-${DATE}.zip"
+            ZIP="${SYMBOL}-metrics-${cur}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
-            echo "→ Fetching metrics $DATE"
+            echo "→ Fetching $ZIP"
             if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
+              unzip -p tmp.zip > "$TARGET_DIR/${ZIP%.zip}.csv"
               rm tmp.zip
               echo " ✅ extracted ${ZIP}"
             else
@@ -61,11 +48,11 @@ jobs:
             cur=$(date -I -d "$cur +1 day")
           done
 
-      - name: Upload metrics artifact
+      - name: Upload metrics artifacts
         uses: actions/upload-artifact@v4
         with:
           name: data-metrics-${{ matrix.symbol }}
-          path: data/futures/um/daily/metrics/${{ matrix.symbol }}/*
+          path: data/futures/um/daily/metrics/${{ matrix.symbol }}/*.csv
 
   aggregate_and_push:
     name: Aggregate & Commit metrics Data
@@ -73,11 +60,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout fresh
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          persist-credentials: true
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Download metrics artifacts
         uses: actions/download-artifact@v4
@@ -90,16 +74,19 @@ jobs:
           set -euo pipefail
           mkdir -p historical_tech/metrics
           find data-artifacts -type f | while read src; do
-            rel=${src#data-artifacts/data/futures/um/daily/metrics/}
-            dst="historical_tech/metrics/${rel}"
+            # Datei: BNBUSDT-metrics-YYYY-MM-DD.csv
+            file=$(basename "$src")
+            symbol=${file%%-*}
+            dst="historical_tech/metrics/${symbol}/${file}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
+            echo " ➕ $dst"
           done
 
       - name: Commit & Push metrics
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
