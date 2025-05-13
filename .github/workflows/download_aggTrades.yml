@@ -9,9 +9,6 @@ on:
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
-  # optional später wieder aktivieren:
-  # schedule:
-  #   - cron: '0 2 1 */6 *'
 
 jobs:
   download-and-features:
@@ -19,6 +16,7 @@ jobs:
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO:       ${{ github.repository }}
+
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -29,19 +27,20 @@ jobs:
         id: dates
         shell: bash
         run: |
-          # wir übernehmen exakt, was der Benutzer eingegeben hat
-          echo "start=${{ github.event.inputs.start_date }}" >> $GITHUB_OUTPUT
-          echo "end=${{ github.event.inputs.end_date }}"     >> $GITHUB_OUTPUT
+          # Wir übernehmen exakt, was der Benutzer eingegeben hat
+          echo "start=${{ github.event.inputs.start_date }}" >> "$GITHUB_OUTPUT"
+          echo "end=${{ github.event.inputs.end_date }}"     >> "$GITHUB_OUTPUT"
 
       - name: Download 6-Monats-Daten
         shell: bash
         run: |
           SD=${{ steps.dates.outputs.start }}
           ED=${{ steps.dates.outputs.end }}
-          mkdir -p data/agg && cd data/agg
+          mkdir -p data/agg
+          cd data/agg
           SYMBOLS=(BTCUSDT ENAUSDT BNBUSDT ETHUSDT SOLUSDT XRPUSDT)
 
-          CUR=$SD
+          CUR="$SD"
           while [[ "$CUR" < "$ED" ]]; do
             for S in "${SYMBOLS[@]}"; do
               ZIP="${S}-aggTrades-${CUR}.zip"
@@ -49,20 +48,23 @@ jobs:
               echo "Downloading $ZIP"
               wget -q "$URL" -O "$ZIP" || echo "WARN: $ZIP fehlt"
             done
-            # hier darf 'date -I -d' stehen, aber **nicht** in den ${{…}}-Ausdrücken
             CUR=$(date -I -d "$CUR +1 day")
           done
 
       - name: Run feature extraction
+        shell: bash
         run: |
           python3 extract_aggTrades_features.py \
             --input-dir   data/agg \
-            --output-file data/features/agg_${{ steps.dates.outputs.start }}_to_${{ steps.dates.outputs.end }}.parquet
+            --output-file data/features/agg_${{ steps.dates.outputs.start }}_to_${{ steps.dates.outputs.end }}.parquet \
+            --start-date  ${{ steps.dates.outputs.start }} \
+            --end-date    ${{ steps.dates.outputs.end }}
 
       - name: Clean up raw data to free disk
         run: rm -rf data/agg/*
 
       - name: Commit & Push Feature-Parquets
+        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
