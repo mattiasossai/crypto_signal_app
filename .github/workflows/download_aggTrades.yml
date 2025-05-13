@@ -9,18 +9,16 @@ on:
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
-  schedule:
-    - cron: '0 2 1 */6 *'  # automatisch alle 6 Monate am 1.
+  # optional später wieder aktivieren:
+  # schedule:
+  #   - cron: '0 2 1 */6 *'
+
 jobs:
   download-and-features:
     runs-on: self-hosted
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      REPO: ${{ github.repository }}
-    strategy:
-      matrix:
-        # jeweils 6-Monats-Intervalle vom Dispatch-Input
-        interval: [0]
+      REPO:       ${{ github.repository }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -29,50 +27,45 @@ jobs:
 
       - name: Calculate date window
         id: dates
+        shell: bash
         run: |
-          START=${{ github.event.inputs.start_date || github.event.schedule }}  
-          END=${{ github.event.inputs.end_date || (date -I -d "$START +6 months") }}
-          echo "start=$START"  >> $GITHUB_OUTPUT
-          echo "end=$END"      >> $GITHUB_OUTPUT
+          # wir übernehmen exakt, was der Benutzer eingegeben hat
+          echo "start=${{ github.event.inputs.start_date }}" >> $GITHUB_OUTPUT
+          echo "end=${{ github.event.inputs.end_date }}"     >> $GITHUB_OUTPUT
 
       - name: Download 6-Monats-Daten
+        shell: bash
         run: |
-          mkdir -p data/agg
-          cd data/agg
           SD=${{ steps.dates.outputs.start }}
           ED=${{ steps.dates.outputs.end }}
+          mkdir -p data/agg && cd data/agg
           SYMBOLS=(BTCUSDT ENAUSDT BNBUSDT ETHUSDT SOLUSDT XRPUSDT)
-          for S in "${SYMBOLS[@]}"; do
-            # von SD bis ED in tägliche ZIPs
-            CUR=$SD
-            while [[ "$CUR" < "$ED" ]]; do
+
+          CUR=$SD
+          while [[ "$CUR" < "$ED" ]]; do
+            for S in "${SYMBOLS[@]}"; do
               ZIP="${S}-aggTrades-${CUR}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${S}/${ZIP}"
               echo "Downloading $ZIP"
               wget -q "$URL" -O "$ZIP" || echo "WARN: $ZIP fehlt"
-              CUR=$(date -I -d "$CUR +1 day")
             done
+            # hier darf 'date -I -d' stehen, aber **nicht** in den ${{…}}-Ausdrücken
+            CUR=$(date -I -d "$CUR +1 day")
           done
 
       - name: Run feature extraction
         run: |
-          cd extractors
           python3 extract_aggTrades_features.py \
-            --input-path ../data/agg \
-            --output-path ../data/features \
-            --symbols BTCUSDT,ENAUSDT,BNBUSDT,ETHUSDT,SOLUSDT,XRPUSDT \
-            --start ${{ steps.dates.outputs.start }} \
-            --end ${{ steps.dates.outputs.end }}
+            --input-dir   data/agg \
+            --output-file data/features/agg_${{ steps.dates.outputs.start }}_to_${{ steps.dates.outputs.end }}.parquet
 
       - name: Clean up raw data to free disk
-        run: |
-          rm -rf data/agg/*
+        run: rm -rf data/agg/*
 
       - name: Commit & Push Feature-Parquets
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/features
-          git commit -m "♻️ Features ${ { steps.dates.outputs.start }} bis ${{ steps.dates.outputs.end }}"
+          git commit -m "♻️ Features ${{ steps.dates.outputs.start }} bis ${{ steps.dates.outputs.end }}"
           git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
-
