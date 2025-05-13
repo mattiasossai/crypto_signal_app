@@ -31,7 +31,7 @@ jobs:
           INTERVALS=( "1h" "4h" )
 
           for iv in "${INTERVALS[@]}"; do
-            # determine start per interval
+            # ermittele Startdatum
             TARGET_DIR="historical_tech/indexPriceKlines/${SYMBOL}/${iv}"
             if compgen -G "$TARGET_DIR/${SYMBOL}-${iv}-*.csv" > /dev/null; then
               LAST=$(find "$TARGET_DIR" -type f -name "${SYMBOL}-${iv}-*.csv" \
@@ -48,8 +48,7 @@ jobs:
 
             cur="$START"
             while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-              DATE="$cur"
-              ZIP="${SYMBOL}-${iv}-${DATE}.zip"
+              ZIP="${SYMBOL}-${iv}-${cur}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
               echo "→ Fetching $ZIP"
               if curl -sSf "$URL" -o tmp.zip; then
@@ -69,8 +68,8 @@ jobs:
         with:
           name: data-indexPriceKlines-${{ matrix.symbol }}
           path: |
-            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/1h/*
-            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/4h/*
+            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/1h/*.csv
+            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/4h/*.csv
 
   aggregate_and_push:
     name: Aggregate & Commit indexPriceKlines Data
@@ -95,16 +94,21 @@ jobs:
           set -euo pipefail
           mkdir -p historical_tech/indexPriceKlines
           find data-artifacts -type f | while read src; do
-            rel=${src#data-artifacts/data/futures/um/daily/indexPriceKlines/}
-            dst="historical_tech/indexPriceKlines/${rel}"
+            # src=.../data-indexPriceKlines-BNBUSDT/1h/BNBUSDT-1h-*.csv
+            symbol_dir=$(basename "$(dirname "$(dirname "$src")")")
+            symbol=${symbol_dir#data-indexPriceKlines-}
+            interval=$(basename "$(dirname "$src")")
+            file=$(basename "$src")
+            dst="historical_tech/indexPriceKlines/${symbol}/${interval}/${file}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
+            echo " ➕ $dst"
           done
 
       - name: Commit & Push indexPriceKlines
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
