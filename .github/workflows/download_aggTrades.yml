@@ -79,7 +79,8 @@ jobs:
           RAW_DIR="data/aggTrades/$SYMBOL"
           mkdir -p "$RAW_DIR"
           CUR="$SD_RAW"
-          while [[ "$CUR" <= "$ED" ]]; do
+          # jetzt inklusive Enddatum: < OR == 
+          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
             echo "Downloading $ZIP"
