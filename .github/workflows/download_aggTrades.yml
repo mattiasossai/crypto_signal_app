@@ -1,4 +1,4 @@
-name: 📥 Download & Extract 6-Month aggTrades
+name: 📥 Download & Extract aggTrades per Symbol
 
 on:
   workflow_dispatch:
@@ -11,8 +11,12 @@ on:
         required: true
 
 jobs:
-  download-and-features:
+  download-and-feature:
     runs-on: self-hosted
+    strategy:
+      matrix:
+        symbol: [BTCUSDT, ENAUSDT, BNBUSDT, ETHUSDT, SOLUSDT, XRPUSDT]
+      max-parallel: 1
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO:       ${{ github.repository }}
@@ -23,51 +27,73 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          python3 -m pip install --upgrade pip
+          pip3 install pandas numpy pyarrow
+
       - name: Calculate date window
         id: dates
         shell: bash
         run: |
-          # Wir übernehmen exakt, was der Benutzer eingegeben hat
           echo "start=${{ github.event.inputs.start_date }}" >> "$GITHUB_OUTPUT"
-          echo "end=${{ github.event.inputs.end_date }}"     >> "$GITHUB_OUTPUT"
+          echo "end=${{ github.event.inputs.end_date }}"   >> "$GITHUB_OUTPUT"
 
-      - name: Download 6-Monats-Daten
+      - name: Download & unzip raw data
         shell: bash
         run: |
+          SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.dates.outputs.start }}
           ED=${{ steps.dates.outputs.end }}
-          mkdir -p data/agg
-          cd data/agg
-          SYMBOLS=(BTCUSDT ENAUSDT BNBUSDT ETHUSDT SOLUSDT XRPUSDT)
 
+          RAW_DIR="data/aggTrades/$SYMBOL"
+          mkdir -p "$RAW_DIR"
           CUR="$SD"
           while [[ "$CUR" < "$ED" ]]; do
-            for S in "${SYMBOLS[@]}"; do
-              ZIP="${S}-aggTrades-${CUR}.zip"
-              URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${S}/${ZIP}"
-              echo "Downloading $ZIP"
-              wget -q "$URL" -O "$ZIP" || echo "WARN: $ZIP fehlt"
-            done
+            ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
+            URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
+            echo "Downloading $ZIP"
+            wget -q "$URL" -O "$ZIP" || { echo "WARN: $ZIP missing"; }
+            unzip -q -o "$ZIP" -d "$RAW_DIR"
+            rm "$ZIP"
             CUR=$(date -I -d "$CUR +1 day")
           done
 
       - name: Run feature extraction
         shell: bash
         run: |
+          SYMBOL=${{ matrix.symbol }}
+          SD=${{ steps.dates.outputs.start }}
+          ED=${{ steps.dates.outputs.end }}
+          mkdir -p "features"
           python3 extract_aggTrades_features.py \
-            --input-dir   data/agg \
-            --output-file data/features/agg_${{ steps.dates.outputs.start }}_to_${{ steps.dates.outputs.end }}.parquet \
-            --start-date  ${{ steps.dates.outputs.start }} \
-            --end-date    ${{ steps.dates.outputs.end }}
-
-      - name: Clean up raw data to free disk
-        run: rm -rf data/agg/*
+            --input-dir   "data/aggTrades/$SYMBOL" \
+            --output-file "features/${SYMBOL}-features-${SD}_to_${ED}.parquet" \
+            --start-date  "$SD" \
+            --end-date    "$ED"
 
       - name: Commit & Push Feature-Parquets
         shell: bash
         run: |
+          SYMBOL=${{ matrix.symbol }}
+          SD=${{ steps.dates.outputs.start }}
+          ED=${{ steps.dates.outputs.end }}
+
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/features
-          git commit -m "♻️ Features ${{ steps.dates.outputs.start }} bis ${{ steps.dates.outputs.end }}"
-          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
+          git add "features/${SYMBOL}-features-${SD}_to_${ED}.parquet"
+          git commit -m "♻️ ${SYMBOL} Features ${SD} to ${ED}" || echo "No changes to commit"
+          git push "https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git" HEAD:main
+
+      - name: Clean up raw data to free disk
+        shell: bash
+        run: |
+          rm -rf "data/aggTrades/${{ matrix.symbol }}"
+
