@@ -35,12 +35,11 @@ jobs:
               | sort | tail -n1)
             START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
           else
-            # noch kein File: nur gestern holen
             START="$YESTERDAY"
           fi
           END="$YESTERDAY"
           echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END" >> $GITHUB_ENV
+          echo "END=$END"     >> $GITHUB_ENV
 
       - name: Download History Range
         shell: bash
@@ -80,22 +79,21 @@ jobs:
       - name: Merge new CSVs into repo
         shell: bash
         run: |
-          for src in historical-artifacts/**/*.csv; do
-            rel=${src#historical-artifacts/}
-            dst="historical/${rel}"
-            if [ ! -f "$dst" ]; then
-              mkdir -p "$(dirname "$dst")"
-              mv "$src" "$dst"
-              echo " ➕ Added $dst"
-            else
-              echo " ⏭ Skipped existing $dst"
-            fi
+          mkdir -p historical
+          find historical-artifacts -type f | while read src; do
+            # extrahiere Ordnername (z.B. historical-BTCUSDT-15m) und Dateiname
+            dir=$(basename "$(dirname "$src")")
+            file=$(basename "$src")
+            dst="historical/${dir}/${file}"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
+            echo " ➕ $dst"
           done
 
       - name: Commit & Push
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
