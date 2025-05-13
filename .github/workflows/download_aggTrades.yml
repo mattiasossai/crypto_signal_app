@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Startdatum (YYYY-MM-DD)'
+        description: 'Globales Startdatum (YYYY-MM-DD)'
         required: true
       end_date:
-        description: 'Enddatum (YYYY-MM-DD)'
+        description: 'Globales Enddatum (YYYY-MM-DD)'
         required: true
 
 jobs:
@@ -43,16 +43,34 @@ jobs:
         id: dates
         shell: bash
         run: |
-          echo "start=${{ github.event.inputs.start_date }}" >> "$GITHUB_OUTPUT"
-          echo "end=${{ github.event.inputs.end_date }}"   >> "$GITHUB_OUTPUT"
+          echo "global_start=${{ github.event.inputs.start_date }}" >> "$GITHUB_OUTPUT"
+          echo "global_end=${{ github.event.inputs.end_date }}"   >> "$GITHUB_OUTPUT"
 
-      - name: Download & unzip raw data
+      - name: Download & unzip raw data with Inception-Mapping & Overlap
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
-          SD=${{ steps.dates.outputs.start }}
-          ED=${{ steps.dates.outputs.end }}
-          # Overlap: einen Tag vor Blockbeginn mitladen
+          SD_GLOBAL=${{ steps.dates.outputs.global_start }}
+          ED=${{ steps.dates.outputs.global_end }}
+
+          # Inception-Daten je Symbol
+          declare -A inception=(
+            [BTCUSDT]=2019-12-31
+            [ETHUSDT]=2019-12-31
+            [XRPUSDT]=2020-01-06
+            [BNBUSDT]=2020-02-10
+            [SOLUSDT]=2020-09-14
+            [ENAUSDT]=2024-04-02
+          )
+          # Wähle SD als max(global_start, inception)
+          INCEP=${inception[$SYMBOL]}
+          if [[ "$SD_GLOBAL" < "$INCEP" ]]; then
+            SD="$INCEP"
+          else
+            SD="$SD_GLOBAL"
+          fi
+
+          # Overlap: einen Tag vor Block-Beginn laden
           SD_RAW=$(date -I -d "$SD -1 day")
 
           RAW_DIR="data/aggTrades/$SYMBOL"
@@ -65,7 +83,7 @@ jobs:
             echo "Downloading $ZIP"
             wget -q "$URL" -O "$ZIP" || echo "WARN: $ZIP missing"
             unzip -q -o "$ZIP" -d "$RAW_DIR"
-            rm "$ZIP"
+            rm -f "$ZIP"
             CUR=$(date -I -d "$CUR +1 day")
           done
 
@@ -73,9 +91,10 @@ jobs:
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
-          SD=${{ steps.dates.outputs.start }}
-          ED=${{ steps.dates.outputs.end }}
-          mkdir -p "features"
+          SD=${{ steps.dates.outputs.global_start }}
+          ED=${{ steps.dates.outputs.global_end }}
+
+          mkdir -p historical_tech/aggtrades/features
           python3 extract_aggTrades_features.py \
             --input-dir   "data/aggTrades/$SYMBOL" \
             --output-file "historical_tech/aggtrades/features/${SYMBOL}-features-${SD}_to_${ED}.parquet" \
@@ -86,8 +105,8 @@ jobs:
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
-          SD=${{ steps.dates.outputs.start }}
-          ED=${{ steps.dates.outputs.end }}
+          SD=${{ steps.dates.outputs.global_start }}
+          ED=${{ steps.dates.outputs.global_end }}
 
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
