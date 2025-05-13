@@ -10,8 +10,8 @@ Lädt alle CSVs eines Symbols (inkl. 1-Tag Overlap) und berechnet pro Tag:
  - avg_trades_per_min
 
 Behalte für die erste Tages-Aggregation bewusst Trades ab Overlap-Tag,
-dann drope das Overlap-Datum vor dem Schreiben. Schreibt Parquet-Output
-für ML mit optionaler Normalisierung und Outlier-Capping.
+wie im Workflow geladen, dann drope das Overlap-Datum vor dem Schreiben.
+Schreibt Parquet-Output für ML mit optionaler Normalisierung und Outlier-Capping.
 """
 
 import argparse
@@ -33,6 +33,7 @@ def cap_outliers(df: pd.DataFrame, columns, lower_q=0.01, upper_q=0.99) -> pd.Da
         hi = df[col].quantile(upper_q)
         df[col] = df[col].clip(lo, hi)
     return df
+
 
 def compute_agg_features(df: pd.DataFrame, normalize: bool = False) -> pd.DataFrame:
     # Timestamps in UTC
@@ -79,6 +80,7 @@ def compute_agg_features(df: pd.DataFrame, normalize: bool = False) -> pd.DataFr
     daily = daily.reset_index().rename(columns={'timestamp': 'date'})
     return daily
 
+
 def main(input_dir: str, output_file: str, start_date: str, end_date: str, normalize: bool):
     # 1) Lade alle CSVs (Overlap-Tag inklusive)
     files = sorted(glob.glob(os.path.join(input_dir, '*.csv')))
@@ -94,7 +96,7 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str, norma
                 header=None,
                 usecols=[5, 2, 6],
                 names=['timestamp', 'quantity', 'isBuyerMaker'],
-                dtype={'timestamp': 'Int64', 'quantity': float, 'isBuyerMaker': bool}
+                dtype={'quantity': float, 'isBuyerMaker': bool}
             )
             df_list.append(tmp)
         except Exception as e:
@@ -137,9 +139,9 @@ if __name__ == '__main__':
     p.add_argument('--normalize',   action='store_true', help="Z-Score-Normalisierung der Features")
     args = p.parse_args()
     main(
-        input_dir  = args.input_dir,
-        output_file= args.output_file,
-        start_date = args.start_date,
-        end_date   = args.end_date,
-        normalize  = args.normalize
+        input_dir   = args.input_dir,
+        output_file = args.output_file,
+        start_date  = args.start_date,
+        end_date    = args.end_date,
+        normalize   = args.normalize
     )
