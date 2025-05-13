@@ -51,7 +51,7 @@ jobs:
           SDG=${{ steps.dates.outputs.global_start }}
           ED=${{ steps.dates.outputs.global_end }}
 
-          # 1) initiales Inception-Datum
+          # 1) Initiales Inception-Datum
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC=2019-12-31;;
             XRPUSDT)         INC=2020-01-06;;
@@ -61,8 +61,8 @@ jobs:
             *)               INC=$SDG;;
           esac
 
-          # 2) Für alle außer BTCUSDT: INC solange einen Tag hochsetzen,
-          #    bis eine ZIP-Datei vorhanden ist
+          # 2) Für alle außer BTCUSDT: INC solange um 1 Tag hochsetzen,
+          #    bis die erste Zip existiert
           if [ "$SYMBOL" != "BTCUSDT" ]; then
             CANDIDATE="$INC"
             while true; do
@@ -78,8 +78,7 @@ jobs:
           fi
 
           # 3) SD = max(global_start, INC)
-          tg=$(date -d"$SDG" +%s)
-          ti=$(date -d"$INC" +%s)
+          tg=$(date -d"$SDG" +%s); ti=$(date -d"$INC" +%s)
           [ $tg -lt $ti ] && SD=$INC || SD=$SDG
 
           # 4) Overlap-Tag
@@ -87,7 +86,7 @@ jobs:
           DIR=data/aggTrades/$SYMBOL
           mkdir -p "$DIR"
 
-          # 5) Download-Loop
+          # 5) Tages-Loop
           CUR="$SD_RAW"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
@@ -110,10 +109,9 @@ jobs:
               --input-dir   data/aggTrades/${{ matrix.symbol }} \
               --output-file historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.global_end }}.parquet \
               --start-date  ${{ steps.dates.outputs.global_start }} \
-              --end-date    ${{ steps.dates.outputs.global_end }} \
-              # optional: --normalize
+              --end-date    ${{ steps.dates.outputs.global_end }}
           else
-            echo "⚠️ No CSVs for ${{ matrix.symbol }}, skipping feature extraction"
+            echo "⚠️ No CSVs for ${{ matrix.symbol }}, skipping"
           fi
 
       - name: Commit & Push
@@ -121,7 +119,7 @@ jobs:
           git config user.name  github-actions[bot]
           git config user.email github-actions[bot]@users.noreply.github.com
           git add historical_tech/aggTrades/features
-          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes to commit"
+          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
           git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
 
       - name: Cleanup raw
