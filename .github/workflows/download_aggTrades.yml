@@ -1,110 +1,78 @@
-name: 📥 Backfill aggTrades → Feature Extraction
+name: 📥 Download & Extract 6-Month aggTrades
 
 on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Startdatum für History (YYYY-MM-DD)'
+        description: 'Startdatum (YYYY-MM-DD)'
         required: true
-        default: '2020-01-01'
       end_date:
-        description: 'Enddatum für History (YYYY-MM-DD), leer = gestern'
-        required: false
-        default: ''
-
+        description: 'Enddatum (YYYY-MM-DD)'
+        required: true
+  schedule:
+    - cron: '0 2 1 */6 *'  # automatisch alle 6 Monate am 1.
 jobs:
-  backfill-aggTrades:
-    runs-on: [self-hosted, linux]
+  download-and-features:
+    runs-on: self-hosted
+    env:
+      REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
     strategy:
-      fail-fast: false
-      max-parallel: 2
       matrix:
-        include:
-          - name: btc_ena
-            symbols: ["BTCUSDT", "ENAUSDT"]
-          - name: eth_sol
-            symbols: ["ETHUSDT", "SOLUSDT"]
-          - name: bnb_xrp
-            symbols: ["BNBUSDT", "XRPUSDT"]
-
+        # jeweils 6-Monats-Intervalle vom Dispatch-Input
+        interval: [0]
     steps:
-      - name: Checkout repo
+      - name: Check out code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install system packages
+      - name: Calculate date window
+        id: dates
         run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip python3-venv wget
+          START=${{ github.event.inputs.start_date || github.event.schedule }}  
+          END=${{ github.event.inputs.end_date || (date -I -d "$START +6 months") }}
+          echo "start=$START"  >> $GITHUB_OUTPUT
+          echo "end=$END"      >> $GITHUB_OUTPUT
 
-      - name: Create & activate Python venv
+      - name: Download 6-Monats-Daten
         run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          pip install --upgrade pip
-          pip install pandas numpy pyarrow
-
-      - name: Download & unzip aggTrades for ${{ matrix.name }}
-        run: |
-          START="${{ github.event.inputs.start_date }}"
-          END="${{ github.event.inputs.end_date }}"
-          if [ -z "$END" ]; then END=$(date --date="yesterday" +%F); fi
-
-          mkdir -p /tmp/agg
-          cd /tmp/agg
-
-          # join(matrix.symbols,' ') expandiert euer Array
-          for S in ${{ join(matrix.symbols, ' ') }}; do
-            mkdir -p "$S"
-            current="$START"
-            while [[ "$current" < "$END" ]] || [[ "$current" == "$END" ]]; do
-              ZIP="${S}-aggTrades-${current}.zip"
+          mkdir -p data/agg
+          cd data/agg
+          SD=${{ steps.dates.outputs.start }}
+          ED=${{ steps.dates.outputs.end }}
+          SYMBOLS=(BTCUSDT ENAUSDT BNBUSDT ETHUSDT SOLUSDT XRPUSDT)
+          for S in "${SYMBOLS[@]}"; do
+            # von SD bis ED in tägliche ZIPs
+            CUR=$SD
+            while [[ "$CUR" < "$ED" ]]; do
+              ZIP="${S}-aggTrades-${CUR}.zip"
               URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${S}/${ZIP}"
-              echo "Downloading $URL"
-              if wget -q "$URL" -O "${S}/${ZIP}"; then
-                unzip -o "${S}/${ZIP}" -d "${S}"
-              else
-                echo "WARNING: $ZIP not found, skipping"
-              fi
-              current=$(date --date="$current + 1 day" +%F)
+              echo "Downloading $ZIP"
+              wget -q "$URL" -O "$ZIP" || echo "WARN: $ZIP fehlt"
+              CUR=$(date -I -d "$CUR +1 day")
             done
           done
 
-      - name: Extract aggTrades Features for ${{ matrix.name }}
+      - name: Run feature extraction
         run: |
-          START="${{ github.event.inputs.start_date }}"
-          END="${{ github.event.inputs.end_date }}"
-          if [ -z "$END" ]; then END=$(date --date="yesterday" +%F); fi
+          cd extractors
+          python3 extract_aggTrades_features.py \
+            --input-path ../data/agg \
+            --output-path ../data/features \
+            --symbols BTCUSDT,ENAUSDT,BNBUSDT,ETHUSDT,SOLUSDT,XRPUSDT \
+            --start ${{ steps.dates.outputs.start }} \
+            --end ${{ steps.dates.outputs.end }}
 
-          . .venv/bin/activate
-          for S in ${{ join(matrix.symbols, ' ') }}; do
-            mkdir -p historical_tech/aggTrades/features/"$S"
-            python scripts/extract_aggTrades_features.py \
-              --input-dir /tmp/agg/"$S" \
-              --output-file historical_tech/aggTrades/features/"$S"/aggTrades_"$S"_"${START}_to_${END}".parquet
-          done
-
-      - name: Clean up raw data for ${{ matrix.name }}
-        run: rm -rf /tmp/agg
-
-      - name: Commit & Push Features for ${{ matrix.name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Clean up raw data to free disk
         run: |
-          START="${{ github.event.inputs.start_date }}"
-          END="${{ github.event.inputs.end_date }}"
-          if [ -z "$END" ]; then END=$(date --date="yesterday" +%F); fi
+          rm -rf data/agg/*
 
+      - name: Commit & Push Feature-Parquets
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git rebase origin/main
+          git add data/features
+          git commit -m "♻️ Features ${ { steps.dates.outputs.start }} bis ${{ steps.dates.outputs.end }}"
+          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
 
-          for S in ${{ join(matrix.symbols, ' ') }}; do
-            git add historical_tech/aggTrades/features/"$S"/*.parquet
-          done
-
-          git diff --cached --quiet || \
-            git commit -m "aggTrades Features ${{ matrix.name }} ${START}_to_${END}"
-          git push origin HEAD:main
