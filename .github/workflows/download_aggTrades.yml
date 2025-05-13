@@ -52,15 +52,18 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.dates.outputs.start }}
           ED=${{ steps.dates.outputs.end }}
+          # Overlap: einen Tag vor Blockbeginn mitladen
+          SD_RAW=$(date -I -d "$SD -1 day")
 
           RAW_DIR="data/aggTrades/$SYMBOL"
           mkdir -p "$RAW_DIR"
-          CUR="$SD"
-          while [[ "$CUR" < "$ED" ]]; do
+          CUR="$SD_RAW"
+          # Lade von SD_RAW bis einschließlich ED
+          while [[ "$CUR" <= "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
             echo "Downloading $ZIP"
-            wget -q "$URL" -O "$ZIP" || { echo "WARN: $ZIP missing"; }
+            wget -q "$URL" -O "$ZIP" || echo "WARN: $ZIP missing"
             unzip -q -o "$ZIP" -d "$RAW_DIR"
             rm "$ZIP"
             CUR=$(date -I -d "$CUR +1 day")
@@ -75,7 +78,7 @@ jobs:
           mkdir -p "features"
           python3 extract_aggTrades_features.py \
             --input-dir   "data/aggTrades/$SYMBOL" \
-            --output-file "features/${SYMBOL}-features-${SD}_to_${ED}.parquet" \
+            --output-file "historical_tech/aggtrades/features/${SYMBOL}-features-${SD}_to_${ED}.parquet" \
             --start-date  "$SD" \
             --end-date    "$ED"
 
@@ -88,12 +91,11 @@ jobs:
 
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "features/${SYMBOL}-features-${SD}_to_${ED}.parquet"
-          git commit -m "♻️ ${SYMBOL} Features ${SD} to ${ED}" || echo "No changes to commit"
+          git add "historical_tech/aggtrades/features/${SYMBOL}-features-${SD}_to_${ED}.parquet"
+          git commit -m "♻️ ${SYMBOL} Features ${SD} to ${ED}" || echo "No changes"
           git push "https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git" HEAD:main
 
       - name: Clean up raw data to free disk
         shell: bash
         run: |
           rm -rf "data/aggTrades/${{ matrix.symbol }}"
-
