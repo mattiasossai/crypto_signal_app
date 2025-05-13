@@ -1,12 +1,9 @@
-# Workflow: Download & Extract aggTrades per Symbol
-# Hinweis: rufe manuell für jeweils 6-Monats-Fenster auf
-
+# .github/workflows/download_aggTrades.yml
 name: '📥 Download & Extract aggTrades per Symbol'
 
 on:
   workflow_dispatch:
     inputs:
-      # Starte jeweils sechs Monate vor Enddatum
       start_date:
         description: 'Startdatum (YYYY-MM-DD) für 6-Monats-Fenster'
         required: true
@@ -26,13 +23,11 @@ jobs:
       REPO:      ${{ github.repository }}
 
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
@@ -46,14 +41,13 @@ jobs:
         id: dates
         run: |
           echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
-          echo "global_end=  ${{ inputs.end_date   }}" >> $GITHUB_OUTPUT
+          echo "global_end=${{ inputs.end_date   }}" >> $GITHUB_OUTPUT
 
       - name: Download & unzip raw data with Overlap & Inception
         run: |
           SYMBOL=${{ matrix.symbol }}
           SDG=${{ steps.dates.outputs.global_start }}
           ED=${{ steps.dates.outputs.global_end }}
-          # Inception per case
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC=2019-12-31;;
             XRPUSDT)         INC=2020-01-06;;
@@ -62,12 +56,9 @@ jobs:
             ENAUSDT)         INC=2024-04-02;;
             *)               INC=$SDG;;
           esac
-          # SD = max(SDG,INC)
           tg=$(date -d"$SDG" +%s); ti=$(date -d"$INC" +%s)
           [ $tg -lt $ti ] && SD=$INC || SD=$SDG
-          # Overlap-Tag für Rolling-Fenster
           SD_RAW=$(date -I -d"$SD -1 day")
-          # Schleife inkl. ED
           DIR=data/aggTrades/$SYMBOL
           mkdir -p $DIR
           CUR=$SD_RAW
