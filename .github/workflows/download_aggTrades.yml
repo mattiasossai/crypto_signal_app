@@ -1,3 +1,5 @@
+# .github/workflows/download_aggTrades.yml
+
 name: '📥 Download & Extract aggTrades per Symbol'
 
 on:
@@ -12,7 +14,8 @@ on:
 
 jobs:
   download-and-feature:
-    runs-on: ubuntu-latest
+    name: Download & Feature ${{ matrix.symbol }}
+    runs-on: self-hosted
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
@@ -26,6 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -61,32 +65,32 @@ jobs:
             *)               INC=$SDG;;
           esac
 
-          # 2) Für alle außer BTCUSDT: INC solange um 1 Tag hochsetzen,
-          #    bis die erste Zip existiert
+          # 2) Für alle außer BTCUSDT: INC solange anheben, bis Zip existiert
           if [ "$SYMBOL" != "BTCUSDT" ]; then
-            CANDIDATE="$INC"
+            CAND="$INC"
             while true; do
-              ZIPFILE="${SYMBOL}-aggTrades-${CANDIDATE}.zip"
-              URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIPFILE}"
-              if curl -sSf "$URL" -o /dev/null; then
-                INC="$CANDIDATE"
+              Z="${SYMBOL}-aggTrades-${CAND}.zip"
+              U="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${Z}"
+              if curl -sSf "$U" -o /dev/null; then
+                INC="$CAND"
                 break
               else
-                CANDIDATE=$(date -I -d "$CANDIDATE +1 day")
+                CAND=$(date -I -d "$CAND +1 day")
               fi
             done
           fi
 
           # 3) SD = max(global_start, INC)
-          tg=$(date -d"$SDG" +%s); ti=$(date -d"$INC" +%s)
-          [ $tg -lt $ti ] && SD=$INC || SD=$SDG
+          t1=$(date -d"$SDG" +%s)
+          t2=$(date -d"$INC" +%s)
+          [ $t1 -lt $t2 ] && SD=$INC || SD=$SDG
 
           # 4) Overlap-Tag
           SD_RAW=$(date -I -d "$SD -1 day")
           DIR=data/aggTrades/$SYMBOL
           mkdir -p "$DIR"
 
-          # 5) Tages-Loop
+          # 5) Download-Loop
           CUR="$SD_RAW"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
@@ -116,11 +120,18 @@ jobs:
 
       - name: Commit & Push
         run: |
-          git config user.name  github-actions[bot]
-          git config user.email github-actions[bot]@users.noreply.github.com
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --mixed origin/main
           git add historical_tech/aggTrades/features
           git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
-          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
+          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main --force-with-lease
 
       - name: Cleanup raw
+        if: always()
         run: rm -rf data/aggTrades/${{ matrix.symbol }}
+
+      - name: Cleanup Runner Workspace
+        if: always()
+        run: rm -rf /home/ssm-user/actions-runner/_work/crypto_signal_app
