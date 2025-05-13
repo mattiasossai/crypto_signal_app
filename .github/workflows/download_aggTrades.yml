@@ -1,3 +1,4 @@
+# .github/workflows/download_aggTrades.yml
 name: 📥 Download & Extract aggTrades per Symbol
 
 on:
@@ -41,6 +42,7 @@ jobs:
 
       - name: Calculate date window
         id: dates
+        shell: bash
         run: |
           echo "global_start=${{ github.event.inputs.start_date }}" >> "$GITHUB_OUTPUT"
           echo "global_end=${{ github.event.inputs.end_date }}"   >> "$GITHUB_OUTPUT"
@@ -78,7 +80,7 @@ jobs:
           RAW_DIR="data/aggTrades/$SYMBOL"
           mkdir -p "$RAW_DIR"
           CUR="$SD_RAW"
-          while [ "$CUR" '<=' "$ED" ] || [ "$CUR" = "$ED" ]; do
+          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
             echo "Downloading $ZIP"
