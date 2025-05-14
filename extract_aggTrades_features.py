@@ -9,7 +9,7 @@ Lädt alle CSVs eines Symbols (inkl. Overlap-Tag) und berechnet pro Tag:
   - max_vol_1h, max_vol_4h
   - avg_trades_per_min (Median Trades/Min)
 
-Schreibt Snappy-komprimiertes Parquet für ML.
+Snappy-komprimiertes Parquet für ML schreiben.
 """
 
 import argparse
@@ -25,11 +25,12 @@ logging.basicConfig(
 )
 
 def compute_agg_features(df: pd.DataFrame) -> pd.DataFrame:
+    # Index auf timestamp setzen
     df = df.set_index("timestamp").sort_index()
 
-    # buy vs. sell
-    df["buy_volume"]  = df["quantity"].where(~df["isBuyerMaker"], 0.0)
-    df["sell_volume"] = df["quantity"].where( df["isBuyerMaker"], 0.0)
+    # Käufer- vs. Verkäufer-Volumen
+    df["buy_volume"]  = df["quantity"].where(~df["is_buyer_maker"], 0.0)
+    df["sell_volume"] = df["quantity"].where( df["is_buyer_maker"], 0.0)
 
     # Tages-Resample
     daily = df.resample("1D").agg(
@@ -38,7 +39,7 @@ def compute_agg_features(df: pd.DataFrame) -> pd.DataFrame:
         sell_volume  = ("sell_volume", "sum"),
     )
 
-    # imbalance & clip
+    # imbalance & Clip
     daily["imbalance"] = (
         (daily["buy_volume"] - daily["sell_volume"])
         / daily["total_volume"]
@@ -50,7 +51,7 @@ def compute_agg_features(df: pd.DataFrame) -> pd.DataFrame:
     daily["max_vol_1h"] = vol1h.resample("1D").max()
     daily["max_vol_4h"] = vol4h.resample("1D").max()
 
-    # avg_trades_per_min (Median)
+    # avg_trades_per_min (Median Trades pro Minute)
     trades_per_min = df["quantity"].resample("1T").count()
     daily["avg_trades_per_min"] = trades_per_min.resample("1D").median()
 
@@ -63,53 +64,48 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
         logging.warning("No CSVs found; skipping.")
         return
 
-    df_list = []
+    chunks = []
     for fn in files:
         try:
             tmp = pd.read_csv(
                 fn,
-                header=None,
-                usecols=[4,2,5],  # timestamp(ms), quantity, isBuyerMaker
-                names=["timestamp","quantity","isBuyerMaker"],
-                dtype={"quantity":"float64","isBuyerMaker":"int8"},
+                usecols=["transact_time","quantity","is_buyer_maker"],
+                dtype={"transact_time":"int64",
+                       "quantity":"float64",
+                       "is_buyer_maker":"bool"},
             )
-            # bool cast
-            tmp["isBuyerMaker"] = tmp["isBuyerMaker"] == 1
-            # to datetime64[ns] without tz
-            tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], unit="ms").dt.tz_localize(None)
-            df_list.append(tmp)
+            # Millisekunden → datetime
+            tmp["timestamp"] = pd.to_datetime(tmp["transact_time"], unit="ms", utc=True)
+            chunks.append(tmp[["timestamp","quantity","is_buyer_maker"]])
         except Exception as e:
             logging.error(f"Error reading {fn}: {e}")
 
-    if not df_list:
+    if not chunks:
         logging.error("No valid data after reading; exit.")
         return
 
-    df = pd.concat(df_list, ignore_index=True).drop_duplicates()
+    df = pd.concat(chunks, ignore_index=True).drop_duplicates()
     logging.info(f"Combined DataFrame shape: {df.shape}")
-    logging.info(f"Dtype of timestamp: {df['timestamp'].dtype}")
-    logging.info(f"Sample timestamps:\n{df['timestamp'].head()}")
 
-    # Filter including overlap
-    sd = pd.to_datetime(start_date)
-    ed = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-    logging.info(f"Filtering between {sd - pd.Timedelta(days=1)} and {ed}")
+    # Filter inkl. 1-Tag Overlap
+    sd = pd.to_datetime(start_date, utc=True)
+    ed = pd.to_datetime(end_date,   utc=True) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     mask = (df["timestamp"] >= (sd - pd.Timedelta(days=1))) & (df["timestamp"] <= ed)
     df = df.loc[mask]
-    logging.info(f"After filtering: {df.shape}")
+    logging.info(f"After filtering (with overlap): {df.shape}")
     if df.empty:
         logging.warning(f"No trades between {start_date} and {end_date}.")
         return
 
-    # Compute features
+    # Features berechnen
     features = compute_agg_features(df)
     before = features.shape[0]
-    # drop overlap day
+    # Overlap-Tag rauswerfen
     features = features[features["timestamp"].dt.normalize() > sd.normalize()]
     after = features.shape[0]
     logging.info(f"Rows before/after dropping overlap: {before}/{after}")
 
-    # write parquet
+    # Parquet schreiben
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     features.to_parquet(output_file, index=False, compression="snappy")
     logging.info(f"[OK] Wrote {after} rows to {output_file}")
@@ -118,9 +114,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(
         description="Extract aggTrades features per symbol with 1-day overlap"
     )
-    p.add_argument("--input-dir",   required=True)
-    p.add_argument("--output-file", required=True)
-    p.add_argument("--start-date",  required=True)
-    p.add_argument("--end-date",    required=True)
+    p.add_argument("--input-dir",   required=True,
+                   help="Ordner mit den heruntergeladenen CSVs")
+    p.add_argument("--output-file", required=True,
+                   help="Ziel-Parquet-Datei, z.B. historical_tech/.../features.parquet")
+    p.add_argument("--start-date",  required=True,
+                   help="YYYY-MM-DD (erstes Datum ohne Overlap)")
+    p.add_argument("--end-date",    required=True,
+                   help="YYYY-MM-DD (letztes Datum)")
     args = p.parse_args()
     main(args.input_dir, args.output_file, args.start_date, args.end_date)
