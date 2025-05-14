@@ -2,14 +2,14 @@
 """
 extract_aggTrades_features.py
 
-Lädt alle CSVs eines Symbols (inkl. 1-Tag Overlap) und berechnet pro Tag:
+Lädt alle CSVs eines Symbols (inkl. 1-Tag Overlap) und berechnet täglich:
  - total_volume, buy_volume, sell_volume
  - imbalance (mit Zero-Division-Guard)
  - max_vol_1h, max_vol_4h
  - avg_trades_per_min
 
-Behalte für die erste Tages-Aggregation Trades ab Overlap-Tag,
-droppe diesen Tag vor dem Parquet-Export.
+Behält für die erste Tages-Aggregation Trades ab Overlap-Tag,
+droppt dann den Overlap vor Parquet-Export.
 """
 
 import argparse
@@ -19,22 +19,25 @@ import glob
 import pandas as pd
 import numpy as np
 
-# Logging
+# Logging Setup
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
-def cap_outliers(df, cols, lower_q=0.01, upper_q=0.99):
+def cap_outliers(df, cols, low=0.01, high=0.99):
     for c in cols:
-        lo, hi = df[c].quantile(lower_q), df[c].quantile(upper_q)
+        lo, hi = df[c].quantile(low), df[c].quantile(high)
         df[c] = df[c].clip(lo, hi)
     return df
 
 def compute_agg_features(df, normalize=False):
+    # Timestamp → Datetime UTC
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
     df = df.set_index('timestamp').sort_index()
 
+    # Buyer/Seller Volume
     df['buy_volume']  = df['quantity'].mask(df['isBuyerMaker'], 0.0)
     df['sell_volume'] = df['quantity'].mask(~df['isBuyerMaker'], 0.0)
 
+    # Tages-Aggregation
     daily = df.resample('1D').agg(
         total_volume=('quantity','sum'),
         buy_volume=('buy_volume','sum'),
@@ -44,31 +47,37 @@ def compute_agg_features(df, normalize=False):
         avg_trades_per_min=('quantity', lambda x: x.resample('min').count().mean())
     )
 
+    # Imbalance mit Guard
     mask = daily['total_volume'] > 0
-    daily['imbalance'] = np.where(mask,
-        (daily['buy_volume'] - daily['sell_volume']) / daily['total_volume'], 0.0)
+    daily['imbalance'] = np.where(
+        mask,
+        (daily['buy_volume'] - daily['sell_volume']) / daily['total_volume'],
+        0.0
+    )
 
+    # Clipping von Ausreißern
     cols = ['total_volume','buy_volume','sell_volume','max_vol_1h','max_vol_4h','avg_trades_per_min']
     daily = cap_outliers(daily, cols)
 
+    # Optional Z-Score-Normierung
     if normalize:
-        daily[cols] = daily[cols].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+        daily[cols] = daily[cols].apply(lambda s: (s - s.mean()) / s.std(ddof=0))
 
     daily = daily.reset_index().rename(columns={'timestamp':'date'})
     return daily
 
 def main(input_dir, output_file, start_date, end_date, normalize=False):
-    logging.info(f"--> Reading CSVs from {input_dir}")
+    logging.info(f"→ Reading CSVs from {input_dir}")
     if not os.path.isdir(input_dir):
-        logging.error(f"Input dir {input_dir} not found.")
+        logging.error(f"Input dir not found: {input_dir}")
         return
 
     files = sorted(glob.glob(os.path.join(input_dir,'*.csv')))
     logging.info(f"Found {len(files)} CSV files.")
     if files:
-        logging.info(f"First: {files[0]}\nLast:  {files[-1]}")
+        logging.info(f"First file: {files[0]}\nLast file:  {files[-1]}")
     else:
-        logging.warning("No CSVs found, skipping.")
+        logging.warning("No CSV files – skipping.")
         return
 
     df_list = []
@@ -79,7 +88,7 @@ def main(input_dir, output_file, start_date, end_date, normalize=False):
                 header=None,
                 usecols=[5,2,6],
                 names=['timestamp','quantity','isBuyerMaker'],
-                dtype={'quantity':float,'isBuyerMaker':bool}
+                dtype={'quantity': float, 'isBuyerMaker': bool}
             )
             df_list.append(tmp)
         except Exception as e:
@@ -90,21 +99,23 @@ def main(input_dir, output_file, start_date, end_date, normalize=False):
         return
 
     df_all = pd.concat(df_list, ignore_index=True).drop_duplicates()
-    logging.info(f"Combined shape: {df_all.shape}")
+    logging.info(f"Combined DataFrame shape: {df_all.shape}")
 
+    # Nur bis end_date (Overlap bleibt erhalten)
     end_ts = int((pd.to_datetime(end_date).tz_localize('UTC')
                  + pd.Timedelta(days=1)
-                 - pd.Timedelta(milliseconds=1)).timestamp()*1000)
+                 - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
     df_all = df_all[df_all['timestamp'] <= end_ts]
     logging.info(f"After end_date filter ({end_date}): {df_all.shape}")
 
     features = compute_agg_features(df_all, normalize)
     logging.info(f"Features before dropping overlap: {features.shape}")
 
+    # Drop Overlap-Tag: behalte nur >= start_date
     features['date'] = pd.to_datetime(features['date']).dt.date
     sd = pd.to_datetime(start_date).date()
     features = features[features['date'] >= sd].drop(columns=['date'])
-    logging.info(f"Features after dropping overlap <= {start_date}: {features.shape}")
+    logging.info(f"Features after dropping overlap ≤ {start_date}: {features.shape}")
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     features.to_parquet(output_file, index=False, compression='snappy')
