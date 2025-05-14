@@ -132,4 +132,6 @@ jobs:
 
       - name: Cleanup Runner Workspace
         if: always()
-        run: rm -rf /home/runner/work/crypto_signal_app/crypto_signal_app
+        run: |
+          echo "🧹 Cleaning up runner workspace"
+          rm -rf "$RUNNER_WORKSPACE"
