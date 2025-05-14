@@ -4,39 +4,33 @@ import pandas as pd
 import numpy as np
 
 def extract_features(df: pd.DataFrame) -> pd.DataFrame:
-    # Index = UTC-Timestamp
-    df['timestamp'] = pd.to_datetime(df['transact_time'], unit='ms', utc=True)
-    df = df.set_index('timestamp').sort_index()
+    # Timestamp aus der echten Spalte 'timestamp' (ms seit Epoch)
+    df['ts'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+    df = df.set_index('ts').sort_index()
 
-    # Filter nur Trades im gewählten Fenster
-    # (start/end kommen schon im Aufrufpunkt gefiltert)
-
-    # Buy/Sell Mengen
-    df['buy_qty']  = np.where(df['is_buyer_maker']==False, df['quantity'], 0.0)
-    df['sell_qty'] = np.where(df['is_buyer_maker']==True,  df['quantity'], 0.0)
+    # Buy/Sell splits
+    df['buy_qty']  = np.where(df['is_buyer_maker'] == False, df['quantity'], 0.0)
+    df['sell_qty'] = np.where(df['is_buyer_maker'] == True,  df['quantity'], 0.0)
 
     # Tages-Resample
     daily = pd.DataFrame({
-        'total_volume': df['quantity'].resample('1D').sum(),
-        'buy_volume':   df['buy_qty'].resample('1D').sum(),
-        'sell_volume':  df['sell_qty'].resample('1D').sum(),
+        'total_volume':  df['quantity'].resample('1D').sum(),
+        'buy_volume':    df['buy_qty'].resample('1D').sum(),
+        'sell_volume':   df['sell_qty'].resample('1D').sum(),
     })
 
     # Imbalance
-    daily['imbalance'] = (
-        (daily['buy_volume'] - daily['sell_volume'])
-        / daily['total_volume']
-    ).fillna(0.0)
+    daily['imbalance'] = ((daily['buy_volume'] - daily['sell_volume'])
+                          / daily['total_volume']).fillna(0.0)
 
-    # 1h/4h Peaks
-    hourly = df['quantity'].resample('1H').sum().resample('1D').max()
-    fourh  = df['quantity'].resample('4H').sum().resample('1D').max()
-    daily['max_vol_1h'] = hourly
-    daily['max_vol_4h'] = fourh
+    # Peaks
+    daily['max_vol_1h'] = df['quantity'].resample('1H').sum().resample('1D').max()
+    daily['max_vol_4h'] = df['quantity'].resample('4H').sum().resample('1D').max()
 
-    # Avg Trades pro Minute
-    tpm = df['quantity'].resample('1T').count().resample('1D').mean()
-    daily['avg_trades_per_min'] = tpm
+    # Avg Trades/min
+    daily['avg_trades_per_min'] = df['quantity'] \
+        .resample('1T').count() \
+        .resample('1D').mean()
 
     return daily
 
@@ -50,10 +44,9 @@ def main(input_dir, output_file, start_date, end_date):
         try:
             tmp = pd.read_csv(
                 fn,
-                header=0,                        # erste Zeile = Header
-                usecols=['quantity','transact_time','is_buyer_maker'],
-                dtype={'quantity': float,
-                       'is_buyer_maker': bool}
+                header=0,  # erste Zeile enthält: agg_trade_id, price, quantity, …, timestamp, is_buyer_maker, …
+                usecols=['quantity','timestamp','is_buyer_maker'],
+                dtype={'quantity': float, 'is_buyer_maker': bool}
             )
             df_list.append(tmp)
         except Exception as e:
@@ -65,10 +58,10 @@ def main(input_dir, output_file, start_date, end_date):
 
     df = pd.concat(df_list, ignore_index=True)
 
-    # Filter nach Zeitfenster (inkl. Overlap-Tag)
-    df['timestamp'] = pd.to_datetime(df['transact_time'], unit='ms', utc=True)
-    mask = (df['timestamp'] >= pd.to_datetime(start_date))
-    mask &= (df['timestamp'] <  pd.to_datetime(end_date) + pd.Timedelta(days=1))
+    # Zeitfenster-Filter (inkl. Overlap-Tag)
+    df['ts'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+    mask = (df['ts'] >= pd.to_datetime(start_date))
+    mask &= (df['ts'] < pd.to_datetime(end_date) + pd.Timedelta(days=1))
     df = df.loc[mask]
 
     if df.empty:
