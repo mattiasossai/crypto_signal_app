@@ -67,7 +67,6 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
         logging.warning(f"Keine CSVs gefunden in {input_dir!r}, skip.")
         return
 
-    # alle CSVs einlesen (ohne dtype auf timestamp festzunageln!)
     df_list = []
     for fn in files:
         try:
@@ -76,8 +75,10 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
                 header=None,
                 usecols=[4, 2, 5],          # 4=timestamp(ms), 2=quantity, 5=isBuyerMaker
                 names=["timestamp","quantity","isBuyerMaker"],
-                dtype={"quantity":"float64","isBuyerMaker":"bool"},
+                dtype={"quantity":"float64", "isBuyerMaker":"int8"},
             )
+            # jetzt int8 → bool
+            tmp["isBuyerMaker"] = tmp["isBuyerMaker"].astype(bool)
             df_list.append(tmp)
         except Exception as e:
             logging.error(f"Error reading {fn}: {e}")
@@ -86,15 +87,15 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
         logging.error("Kein Datensatz nach dem Einlesen, exit.")
         return
 
-    df = pd.concat(df_list, ignore_index=True)
-    df = df.drop_duplicates()
+    df = pd.concat(df_list, ignore_index=True).drop_duplicates()
 
     # Filter auf Zeitfenster (inkl. Overlap-Tag)
     start_ts = int(pd.to_datetime(start_date).timestamp() * 1000)
     # end_date inclusive bis 23:59:59.999
-    end_ts   = int((pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
-    mask = df["timestamp"].between(start_ts, end_ts)
-    df = df.loc[mask]
+    end_ts   = int((pd.to_datetime(end_date)
+                    + pd.Timedelta(days=1)
+                    - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
+    df = df.loc[df["timestamp"].between(start_ts, end_ts)]
     if df.empty:
         logging.warning(f"No trades between {start_date} and {end_date}.")
         return
@@ -105,7 +106,9 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
     features = compute_agg_features(df)
     # Drop overlap-Tag (alles ≤ start_date)
     before = features.shape[0]
-    features = features[features["timestamp"].dt.normalize() > pd.to_datetime(start_date)]
+    features = features[
+        features["timestamp"].dt.normalize() > pd.to_datetime(start_date)
+    ]
     after  = features.shape[0]
     logging.info(f"Features before dropping overlap: {before}, after: {after}")
 
