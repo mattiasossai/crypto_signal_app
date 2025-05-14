@@ -85,7 +85,7 @@ jobs:
       - name: Download all indexPriceKlines artifacts
         uses: actions/download-artifact@v4
         with:
-          path: data-artifacts    # <-- ohne 'name', lädt alle artifacts
+          path: data-artifacts
 
       - name: Merge indexPriceKlines into historical_tech
         shell: bash
@@ -94,13 +94,17 @@ jobs:
           ROOT="historical_tech/indexPriceKlines/data-artifacts"
           mkdir -p "$ROOT"
 
-          # jede Unterordner-Struktur (data-indexPriceKlines-<SYMBOL>)
-          for art in data-artifacts/*; do
-            name=$(basename "$art")               # e.g. data-indexPriceKlines-BNBUSDT
-            dst="$ROOT/$name"
-            mkdir -p "$dst"
-            mv "$art"/* "$dst"/
-            echo " ➕ Moved $name → $dst"
+          # Datei-für-Datei verschieben, damit keine leeren Ordner konfligieren
+          find data-artifacts -type f -name '*.csv' | while read src; do
+            # src = data-artifacts/data-indexPriceKlines-<SYM>/<int>/<file>.csv
+            symbol_dir=$(basename "$(dirname "$(dirname "$src")")")
+            symbol=${symbol_dir#data-indexPriceKlines-}         # z.B. BTCUSDT
+            interval=$(basename "$(dirname "$src")")           # "1h" oder "4h"
+            file=$(basename "$src")
+            dst="$ROOT/${symbol_dir}/${interval}/${file}"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
+            echo " ➕ $dst"
           done
 
       - name: Commit & Push indexPriceKlines
