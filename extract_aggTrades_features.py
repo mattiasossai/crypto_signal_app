@@ -3,7 +3,6 @@ import os
 import glob
 import argparse
 import logging
-from datetime import datetime
 import pandas as pd
 
 logging.basicConfig(
@@ -12,47 +11,47 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+EXPECTED_COLS = [
+    "agg_trade_id","price","quantity",
+    "first_trade_id","last_trade_id",
+    "transact_time","is_buyer_maker"
+]
+
 def read_aggtrade_csv(fn: str) -> pd.DataFrame:
-    """
-    Liest eine AggTrades-CSV und harmonisiert Spalten:
-     - erkennt und entfernt eine Kopfzeile, falls vorhanden
-     - benennt transact_time -> timestamp (in ms)
-    """
+    # Erkennen, ob die erste Zeile Header ist
     with open(fn, "r") as f:
         first = f.readline().strip().split(",")
-    # erwartete Spalten:
-    cols = ["agg_trade_id","price","quantity","first_trade_id","last_trade_id","transact_time","is_buyer_maker"]
-    header = (first == cols)
+    header = (first == EXPECTED_COLS)
+
     df = pd.read_csv(
         fn,
-        names=cols if not header else None,
         header=0 if header else None,
+        names=EXPECTED_COLS if not header else None,
         usecols=["quantity","transact_time","is_buyer_maker"],
-        dtype={"quantity":float, "transact_time":int, "is_buyer_maker":bool},
+        dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
     return df
 
 def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    """
-    Berechnet pro Tag:
-      • total_volume, buy_volume, sell_volume
-      • max_vol_1h, max_vol_4h
-      • avg_trades_per_min
-      • imbalance = (buy−sell)/total
-    Filtert auf [start, end].
-    """
-    # timestamp index
+    # Timestamp-Spalte erzeugen (UTC-aware)
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
-    # Tagesfilter inkl. letzter Millisekunde
-    sd = pd.to_datetime(start)
-    ed = pd.to_datetime(end) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+
+    # Start/End als UTC-aware datetime
+    sd = pd.to_datetime(start).tz_localize("UTC")
+    ed = (
+        pd.to_datetime(end).tz_localize("UTC")
+        + pd.Timedelta(days=1)
+        - pd.Timedelta(milliseconds=1)
+    )
+
+    # Slice
     df = df[sd:ed]
     if df.empty:
         logging.warning("⚠️ No trades between %s and %s.", start, end)
         return pd.DataFrame()
 
-    # Resample täglich
+    # Tägliches Aggregat
     daily = df.resample("1D").agg(
         total_volume=("quantity", "sum"),
         buy_volume=("quantity", lambda x: x[~df.loc[x.index, "is_buyer_maker"]].sum()),
@@ -61,7 +60,10 @@ def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
         max_vol_4h=("quantity", lambda x: x.resample("4H").sum().max()),
         avg_trades_per_min=("quantity", lambda x: x.resample("1T").count().mean()),
     )
-    daily["imbalance"] = (daily["buy_volume"] - daily["sell_volume"]) / daily["total_volume"]
+    daily["imbalance"] = (
+        daily["buy_volume"] - daily["sell_volume"]
+    ) / daily["total_volume"]
+
     return daily
 
 def main(input_dir: str, output_file: str, start_date: str, end_date: str):
@@ -77,6 +79,7 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
             df_list.append(read_aggtrade_csv(fn))
         except Exception as e:
             logging.error("Error reading %s: %s", fn, e)
+
     if not df_list:
         logging.error("❌ No valid data; exiting.")
         return
@@ -92,7 +95,6 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     feats.to_parquet(output_file, index=True, compression="snappy")
     logging.info("✅ Wrote features to %s", output_file)
-
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Extract aggTrades features")
