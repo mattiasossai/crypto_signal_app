@@ -31,7 +31,7 @@ jobs:
           INTERVALS=( "1h" "4h" )
 
           for iv in "${INTERVALS[@]}"; do
-            # ermittele Startdatum
+            # determine start date
             TARGET_DIR="historical_tech/indexPriceKlines/${SYMBOL}/${iv}"
             if compgen -G "$TARGET_DIR/${SYMBOL}-${iv}-*.csv" > /dev/null; then
               LAST=$(find "$TARGET_DIR" -type f -name "${SYMBOL}-${iv}-*.csv" \
@@ -66,7 +66,7 @@ jobs:
       - name: Upload indexPriceKlines artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: data-indexPriceKlines-${{ matrix.symbol }}
+          name: data-indexPriceKlines
           path: |
             data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/1h/*.csv
             data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/4h/*.csv
@@ -86,23 +86,24 @@ jobs:
       - name: Download indexPriceKlines artifacts
         uses: actions/download-artifact@v4
         with:
+          name: data-indexPriceKlines
           path: data-artifacts
 
       - name: Merge indexPriceKlines into historical_tech
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p historical_tech/indexPriceKlines
-          find data-artifacts -type f | while read src; do
-            # src=.../data-indexPriceKlines-BNBUSDT/1h/BNBUSDT-1h-*.csv
-            symbol_dir=$(basename "$(dirname "$(dirname "$src")")")
-            symbol=${symbol_dir#data-indexPriceKlines-}
-            interval=$(basename "$(dirname "$src")")
-            file=$(basename "$src")
-            dst="historical_tech/indexPriceKlines/${symbol}/${interval}/${file}"
-            mkdir -p "$(dirname "$dst")"
-            mv "$src" "$dst"
-            echo " ➕ $dst"
+          ROOT="historical_tech/indexPriceKlines/data-artifacts"
+          mkdir -p "$ROOT"
+
+          # für jede data-indexPriceKlines-ORDNER
+          for art in data-artifacts/*; do
+            name=$(basename "$art")                         # z.B. data-indexPriceKlines-BNBUSDT
+            dst="$ROOT/$name"
+            mkdir -p "$dst"
+            # move gleich die kompletten interval-Verzeichnisse (1h,4h)
+            mv "$art"/* "$dst"/
+            echo " ➕ Moved $name → $dst"
           done
 
       - name: Commit & Push indexPriceKlines
@@ -112,10 +113,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add historical_tech/indexPriceKlines
+          git add historical_tech/indexPriceKlines/data-artifacts
           if git diff --cached --quiet; then
             echo "✅ No new indexPriceKlines to commit"
           else
-            git commit -m "chore(data): backfill indexPriceKlines ${START}→${END} [skip ci]"
+            git commit -m "chore(data): backfill indexPriceKlines [skip ci]"
             git push origin HEAD:main
           fi
