@@ -13,7 +13,7 @@ on:
 jobs:
   download-and-feature:
     name: Download & Feature ${{ matrix.symbol }}
-    runs-on: ubuntu-latest    # Wechsel zu self-hosted nur hier anpassen
+    runs-on: ubuntu-latest    # bei Bedarf hier auf self-hosted umstellen
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
@@ -42,7 +42,7 @@ jobs:
         id: dates
         run: |
           echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
-          echo "global_end=${{ inputs.end_date }}"   >> $GITHUB_OUTPUT
+          echo "global_end=${{ inputs.end_date   }}" >> $GITHUB_OUTPUT
 
       - name: 📂 Download & unzip raw data with Overlap & Inception
         shell: bash
@@ -99,9 +99,9 @@ jobs:
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: ✅ Verify CSV directory
+      - name: ✅ Verify CSV dir
         run: |
-          if [ ! -d "data/aggTrades/${{ matrix.symbol }}" ]; then
+          if [ ! -d data/aggTrades/${{ matrix.symbol }} ]; then
             echo "❌ data/aggTrades/${{ matrix.symbol }} not found"
             exit 1
           fi
@@ -115,7 +115,7 @@ jobs:
             --start-date  ${{ steps.dates.outputs.global_start }} \
             --end-date    ${{ steps.dates.outputs.global_end }}
 
-      - name: 🔄 Sync & Push changes
+      - name: 🔄 Sync & Push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -123,7 +123,7 @@ jobs:
           git checkout main
           git pull --rebase origin main
           git add historical_tech/aggTrades/features
-          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes to commit"
+          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
           git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
 
       - name: 🧹 Cleanup raw data
