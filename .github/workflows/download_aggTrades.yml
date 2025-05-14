@@ -1,58 +1,46 @@
-name: '📥 Download & Extract aggTrades per Symbol'
+name: Download & Extract aggTrades Features
 
 on:
   workflow_dispatch:
-    inputs:
-      start_date:
-        description: 'Startdatum (YYYY-MM-DD) für 6-Monats-Fenster'
-        required: true
-      end_date:
-        description: 'Enddatum (YYYY-MM-DD) für 6-Monats-Fenster'
-        required: true
+  schedule:
+    - cron: '0 2 * * *'   # täglich 02:00 UTC
 
 jobs:
   download-and-feature:
-    name: Download & Feature ${{ matrix.symbol }}
-    # Wechsel hier zwischen ubuntu-latest und self-hosted:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 1
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      REPO:       ${{ github.repository }}
-
+      REPO: ${{ github.repository }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
 
-      - name: Setup Python & Tools
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip curl
-          pip3 install --upgrade pip pandas numpy pyarrow
+          python-version: '3.x'
 
-      - name: Calc dates
-        id: dates
+      - name: Install dependencies
         run: |
-          echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
-          echo "global_end=${{ inputs.end_date   }}" >> $GITHUB_OUTPUT
+          python -m pip install --upgrade pip pandas pyarrow
 
-      - name: Download & unzip raw data with Overlap & Inception
-        shell: bash
+      - name: Compute global start/end
+        id: set-dates
+        run: |
+          echo "global_start=2020-01-01" >> $GITHUB_OUTPUT
+          echo "global_end=2020-02-01"   >> $GITHUB_OUTPUT
+
+      - name: Download aggTrades ZIPs
         run: |
           SYMBOL=${{ matrix.symbol }}
-          SDG=${{ steps.dates.outputs.global_start }}
-          ED=${{ steps.dates.outputs.global_end }}
+          SDG=${{ steps.set-dates.outputs.global_start }}
+          ED=${{ steps.set-dates.outputs.global_end }}
 
-          # 1) Initiales Inception-Datum
+          # Inception-Tage (Overlap)
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC=2019-12-31;;
             XRPUSDT)         INC=2020-01-06;;
@@ -62,71 +50,56 @@ jobs:
             *)               INC=$SDG;;
           esac
 
-          # 2) Für alle außer BTCUSDT INC so lange erhöhen, bis erste ZIP da ist
-          if [ "$SYMBOL" != "BTCUSDT" ]; then
-            CAND="$INC"
-            while true; do
-              ZIP="${SYMBOL}-aggTrades-${CAND}.zip"
-              URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
-              if curl -sSf "$URL" -o /dev/null; then
-                INC="$CAND"; break
-              else
-                CAND=$(date -I -d "$CAND +1 day")
-              fi
+          # für alle außer BTC/ETH das erste existierende ZIP ermitteln
+          if [[ "$SYMBOL" != "BTCUSDT" && "$SYMBOL" != "ETHUSDT" ]]; then
+            C=$INC
+            while ! curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/${SYMBOL}-aggTrades-$C.zip" -o /dev/null; do
+              C=$(date -I -d "$C +1 day")
             done
+            INC=$C
           fi
 
-          # 3) SD = max(global_start, INC)
-          t1=$(date -d"$SDG" +%s); t2=$(date -d"$INC" +%s)
-          [ $t1 -lt $t2 ] && SD=$INC || SD=$SDG
+          # effektive Start + Overlap-Tag
+          SD_RAW=$(date -I -d "$SDG -1 day")
+          mkdir -p data/aggTrades/$SYMBOL
 
-          # 4) Overlap-Tag vorbereiten
-          SD_RAW=$(date -I -d "$SD -1 day")
-          DIR=data/aggTrades/$SYMBOL
-          mkdir -p "$DIR"
-
-          # 5) Download-Loop inkl. Overlap-Tag
           CUR="$SD_RAW"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
-            URL="https://data.binance.vision/data/futures/um/daily/aggTrades/${SYMBOL}/${ZIP}"
+            URL="https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP"
             echo "→ Fetching $ZIP"
             if curl -sSf "$URL" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$DIR" && rm -f "$ZIP"
+              unzip -q -o "$ZIP" -d data/aggTrades/$SYMBOL
+              rm -f "$ZIP"
             else
-              echo "⚠️ Missing $ZIP – skipping"; rm -f "$ZIP" || true
+              echo "⚠️ Missing $ZIP – skipping"
+              rm -f "$ZIP" || true
             fi
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Verify CSV directory
+      - name: Check downloaded folder
         run: |
-          if [ ! -d "data/aggTrades/${{ matrix.symbol }}" ]; then
-            echo "❌ data/aggTrades/${{ matrix.symbol }} not found"; exit 1
-          fi
-          echo "✅ data/aggTrades/${{ matrix.symbol }} exists"
+          test -d data/aggTrades/${{ matrix.symbol }} && echo "✅ data/aggTrades/${{ matrix.symbol }} exists" || (echo "❌ Missing data folder" && exit 1)
 
-      - name: Feature extraction
+      - name: Extract Features to Parquet
         run: |
-          mkdir -p historical_tech/aggTrades/features
           python3 extract_aggTrades_features.py \
             --input-dir   data/aggTrades/${{ matrix.symbol }} \
-            --output-file historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.global_end }}.parquet \
-            --start-date  ${{ steps.dates.outputs.global_start }} \
-            --end-date    ${{ steps.dates.outputs.global_end }}
+            --output-file historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.set-dates.outputs.global_start }}_to_${{ steps.set-dates.outputs.global_end }}.parquet \
+            --start-date  ${{ steps.set-dates.outputs.global_start }} \
+            --end-date    ${{ steps.set-dates.outputs.global_end }}
 
-      - name: Sync & Push changes
+      - name: Commit & Push features
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # hole aktuelle main und rebase, statt reset, um stale-fehler zu vermeiden
           git fetch origin main
           git checkout main
-          git pull --rebase origin main
-          git add historical_tech/aggTrades/features
-          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes to commit"
-          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
+          git add historical_tech/aggTrades/features/
+          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.set-dates.outputs.global_start }} to ${{ steps.set-dates.outputs.global_end }}" || echo "No changes to commit"
+          git push https://x-access-token:${{ env.REPO_TOKEN }}@github.com/${{ env.REPO }} HEAD:main
 
-      - name: Cleanup raw data
-        if: always()
-        run: rm -rf data/aggTrades/${{ matrix.symbol }}
+      - name: Cleanup download folder
+        run: |
+          rm -rf data/aggTrades/${{ matrix.symbol }}
