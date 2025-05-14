@@ -1,0 +1,108 @@
+name: '📥 Download & Feature bookDepth per Symbol'
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Startdatum (YYYY-MM-DD)'
+        required: true
+      end_date:
+        description: 'Enddatum (YYYY-MM-DD)'
+        required: true
+
+jobs:
+  download-and-feature:
+    name: Download & Feature ${{ matrix.symbol }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 1
+    env:
+      REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO:       ${{ github.repository }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pandas pyarrow
+
+      - name: Calc dates
+        id: dates
+        run: |
+          echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
+          echo "global_end=${{ inputs.end_date }}"   >> $GITHUB_OUTPUT
+
+      - name: Download & unzip bookDepth
+        run: |
+          SYMBOL=${{ matrix.symbol }}
+          SDG=${{ steps.dates.outputs.global_start }}
+          ED=${{ steps.dates.outputs.global_end }}
+
+          # 1) Symbol-Inception (erstes bookDepth-File)
+          case "$SYMBOL" in
+            BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
+            XRPUSDT)                           INC="2023-01-06";;
+            ENAUSDT)                           INC="2024-04-02";;
+            *)                                 INC=$SDG;;
+          esac
+
+          # 2) Start = max(global_start, INC)
+          if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
+            SD="$INC"
+          else
+            SD="$SDG"
+          fi
+
+          DIR=data/bookDepth/$SYMBOL
+          mkdir -p "$DIR"
+
+          CUR="$SD"
+          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
+            F="bookDepth/${SYMBOL}/${SYMBOL}-bookDepth-${CUR}.csv"
+            URL="https://data.binance.vision/data/futures/um/daily/$F"
+            echo "→ Fetching ${F##*/}"
+            if curl -sSf "$URL" -o "$CUR.csv"; then
+              mv "$CUR.csv" "$DIR/"
+            else
+              echo "⚠️ Missing ${F##*/}, skipping"
+            fi
+            CUR=$(date -I -d "$CUR +1 day")
+          done
+
+      - name: Verify CSV directory
+        run: |
+          if [ ! -d "data/bookDepth/${{ matrix.symbol }}" ]; then
+            echo "❌ data/bookDepth/${{ matrix.symbol }} fehlt"; exit 1
+          fi
+          echo "✅ data/bookDepth/${{ matrix.symbol }} exists"
+
+      - name: Feature extraction
+        run: |
+          mkdir -p historical_tech/bookDepth/features
+          python3 extract_bookDepth_features.py \
+            --input-dir   data/bookDepth/${{ matrix.symbol }} \
+            --output-file historical_tech/bookDepth/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.global_end }}.parquet \
+            --start-date  ${{ steps.dates.outputs.global_start }} \
+            --end-date    ${{ steps.dates.outputs.global_end }}
+
+      - name: Sync & Push changes
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main
+          git add historical_tech/bookDepth/features
+          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
+          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
