@@ -31,21 +31,13 @@ jobs:
           TARGET_DIR="data/futures/um/daily/metrics/${SYMBOL}"
           mkdir -p "$TARGET_DIR"
 
-          # Backfill: ab Tag nach letztem CSV bis gestern
-          if compgen -G "$TARGET_DIR/${SYMBOL}-metrics-*.csv" > /dev/null; then
-            LAST=$(find "$TARGET_DIR" -type f -name "${SYMBOL}-metrics-*.csv" \
-              | sed -E "s/.*${SYMBOL}-metrics-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
-              | sort | tail -n1)
-            START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
-          else
-            START="$YESTERDAY"
-          fi
+          # Backfill nur gestern (oder seit letztem File)
+          START="$YESTERDAY"
           END="$YESTERDAY"
 
           cur="$START"
           while [[ "$cur" < "$END" || "$cur" == "$END" ]]; do
-            DATE="$cur"
-            ZIP="${SYMBOL}-metrics-${DATE}.zip"
+            ZIP="${SYMBOL}-metrics-${cur}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
             echo "→ Fetching $ZIP"
             if curl -sSf "$URL" -o tmp.zip; then
@@ -59,12 +51,11 @@ jobs:
             cur=$(date -I -d "$cur +1 day")
           done
 
-      - name: Upload all metrics as single artifact
+      - name: Upload metrics artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: data-metrics
-          path: |
-            data/futures/um/daily/metrics/**/*.csv
+          name: data-metrics-${{ matrix.symbol }}
+          path: data/futures/um/daily/metrics/${{ matrix.symbol }}/*.csv
 
   aggregate_and_push:
     name: Aggregate & Commit metrics Data
@@ -72,37 +63,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout fresh
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
 
-      - name: Download metrics artifact
+      - name: Download metrics artifacts
         uses: actions/download-artifact@v4
         with:
-          name: data-metrics
           path: data-artifacts
-
-      - name: Flatten into data-artifacts/data-metrics
-        shell: bash
-        run: |
-          mkdir -p data-artifacts/data-metrics
-          find data-artifacts -type f -name "*-metrics-*.csv" \
-            -exec mv {} data-artifacts/data-metrics/ \;
 
       - name: Merge metrics into historical_tech
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p historical_tech/metrics
-          for file in data-artifacts/data-metrics/*.csv; do
-            fname=$(basename "$file")
-            symbol=${fname%%-*}                            # z.B. "BTCUSDT"
-            dst="historical_tech/metrics/${symbol}/${fname}"
-            mkdir -p "$(dirname "$dst")"
-            mv "$file" "$dst"
-            echo " ➕ $dst"
+          ROOT="historical_tech/metrics/data-artifacts"
+          mkdir -p "$ROOT"
+          # Für jedes heruntergeladene Artifact-Verzeichnis (data-metrics-XYZ)
+          for artdir in data-artifacts/*; do
+            name=$(basename "$artdir")
+            dst="$ROOT/$name"
+            mkdir -p "$dst"
+            # move alle CSVs hinein
+            mv "$artdir"/*.csv "$dst"/
+            echo " ➕ Moved ${name}/*.csv → $dst"
           done
 
       - name: Commit & Push metrics
@@ -112,10 +94,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add historical_tech/metrics
+          git add historical_tech/metrics/data-artifacts
           if git diff --cached --quiet; then
             echo "✅ No new metrics to commit"
           else
-            git commit -m "chore(data): backfill metrics ${START}→${END} [skip ci]"
+            git commit -m "chore(data): backfill metrics [skip ci]"
             git push origin HEAD:main
           fi
