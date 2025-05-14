@@ -82,11 +82,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Download indexPriceKlines artifacts
+      - name: Download all indexPriceKlines artifacts
         uses: actions/download-artifact@v4
         with:
-          name: data-indexPriceKlines-${{ matrix.symbol }}
-          path: data-artifacts
+          path: data-artifacts    # <-- ohne 'name', lädt alle artifacts
 
       - name: Merge indexPriceKlines into historical_tech
         shell: bash
@@ -95,6 +94,7 @@ jobs:
           ROOT="historical_tech/indexPriceKlines/data-artifacts"
           mkdir -p "$ROOT"
 
+          # jede Unterordner-Struktur (data-indexPriceKlines-<SYMBOL>)
           for art in data-artifacts/*; do
             name=$(basename "$art")               # e.g. data-indexPriceKlines-BNBUSDT
             dst="$ROOT/$name"
