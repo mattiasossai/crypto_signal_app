@@ -13,7 +13,7 @@ on:
 jobs:
   download-and-feature:
     name: Download & Feature ${{ matrix.symbol }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
