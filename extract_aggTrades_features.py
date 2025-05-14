@@ -5,33 +5,65 @@ import glob
 import logging
 import pandas as pd
 
-def main(input_dir: str, output_file: str, start_date: str, end_date: str):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 
-    # 1) Alle CSV-Dateien einlesen
+def extract_features(df: pd.DataFrame) -> pd.Series:
+    """
+    aggregiert pro Tag:
+      total_volume, buy_volume, sell_volume,
+      max_vol_1h, max_vol_4h, avg_trades_per_min, imbalance
+    """
+    # daily resample
+    daily = df.resample("1D").agg(
+        total_volume=("quantity", "sum"),
+        buy_volume=("quantity", lambda x: x[~df.loc[x.index, "is_buyer_maker"]].sum()),
+        sell_volume=("quantity", lambda x: x[df.loc[x.index, "is_buyer_maker"]].sum()),
+        max_vol_1h=("quantity", lambda x: x.resample("1H").sum().max()),
+        max_vol_4h=("quantity", lambda x: x.resample("4H").sum().max()),
+        avg_trades_per_min=("quantity", lambda x: x.resample("1T").count().mean()),
+    )
+    daily["imbalance"] = (daily["buy_volume"] - daily["sell_volume"]) / daily["total_volume"].replace(0, pd.NA)
+    return daily
+
+def main(input_dir: str, output_file: str, start_date: str, end_date: str):
+    # 1) CSVs sammeln
     pattern = os.path.join(input_dir, "*.csv")
     files = sorted(glob.glob(pattern))
     if not files:
-        logging.error(f"No CSV files found in {input_dir}")
+        logging.error(f"No files found in {input_dir}")
         return
 
-    df_list = []
+    dfs = []
     for fn in files:
+        # 2) Prüfen, ob erste Zeile Header ist
+        with open(fn, "r") as f:
+            first = f.readline().strip().split(",")[0]
+        skip = 1 if first == "agg_trade_id" else 0
+
         try:
             tmp = pd.read_csv(
                 fn,
-                names=["agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker"],
-                header=0,                # Kopfzeile manuell einlesen
+                header=None,
+                skiprows=skip,
+                names=[
+                    "agg_trade_id", "price", "quantity",
+                    "first_trade_id", "last_trade_id",
+                    "transact_time", "is_buyer_maker"
+                ],
                 dtype={
-                    "agg_trade_id": int,
-                    "price": float,
-                    "quantity": float,
-                    "first_trade_id": int,
-                    "last_trade_id": int,
-                    "transact_time": int,
-                    "is_buyer_maker": bool
+                    "agg_trade_id":   "Int64",
+                    "price":          "float64",
+                    "quantity":       "float64",
+                    "first_trade_id": "Int64",
+                    "last_trade_id":  "Int64",
+                    "transact_time":  "Int64",
+                    "is_buyer_maker": "boolean"
                 },
-                usecols=["quantity", "transact_time", "is_buyer_maker"],
+                usecols=["quantity","transact_time","is_buyer_maker"],
                 na_values=["", "NA"],
                 engine="c"
             )
@@ -39,52 +71,37 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
             logging.error(f"Error reading {fn}: {e}")
             continue
 
-        # Timestamp-Spalte
+        # 3) Timestamp erzeugen und index setzen
         tmp["timestamp"] = pd.to_datetime(tmp["transact_time"], unit="ms", utc=True)
         tmp = tmp.set_index("timestamp").sort_index()
-        df_list.append(tmp[["quantity", "is_buyer_maker"]])
+        dfs.append(tmp)
 
-    if not df_list:
-        logging.error("No valid data after reading; exit.")
+    if not dfs:
+        logging.warning("No valid data after reading; exiting.")
         return
 
-    df = pd.concat(df_list)
-    logging.info(f"Combined DataFrame shape: {df.shape}")
+    df = pd.concat(dfs, axis=0)
 
-    # 2) In Epoch-Filter
-    sd = pd.to_datetime(start_date, utc=True)
-    ed = pd.to_datetime(end_date,   utc=True) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    # 4) Auf den gewünschten Zeitraum filtern
+    sd = pd.to_datetime(start_date).tz_localize("UTC")
+    ed = pd.to_datetime(end_date).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
     df = df.loc[(df.index >= sd) & (df.index <= ed)]
     if df.empty:
         logging.warning(f"No trades between {start_date} and {end_date}.")
         return
-    logging.info(f"After filtering: {df.shape}")
 
-    # 3) Buy/Sell-Quantities als eigene Spalten
-    df["buy_quantity"]  = df["quantity"].where(~df["is_buyer_maker"], 0.0)
-    df["sell_quantity"] = df["quantity"].where( df["is_buyer_maker"], 0.0)
+    # 5) Feature-Engineering
+    features = extract_features(df)
 
-    # 4) Tages-Aggregation
-    daily = df.resample("1D").agg(
-        total_volume      = ("quantity",      "sum"),
-        buy_volume        = ("buy_quantity",  "sum"),
-        sell_volume       = ("sell_quantity", "sum"),
-        max_vol_1h        = ("quantity",      lambda x: x.resample("1h").sum().max()),
-        max_vol_4h        = ("quantity",      lambda x: x.resample("4h").sum().max()),
-        avg_trades_per_min= ("quantity",      lambda x: x.resample("1min").count().mean()),
-    )
-    # 5) Imbalance
-    daily["imbalance"] = (daily["buy_volume"] - daily["sell_volume"]) / daily["total_volume"]
-
-    # 6) Abspeichern
+    # 6) Schreiben
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    daily.to_parquet(output_file, index=True, compression="snappy")
+    features.to_parquet(output_file, index=True)
     logging.info(f"Wrote features to {output_file}")
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Extract aggTrades features per day")
-    p.add_argument("--input-dir",   required=True, help="Folder with CSVs")
-    p.add_argument("--output-file", required=True, help="Path for output Parquet")
+    p = argparse.ArgumentParser(description="Extract aggTrades Features")
+    p.add_argument("--input-dir",  required=True, help="Ordner mit CSVs")
+    p.add_argument("--output-file", required=True, help="Ziel Parquet-Datei")
     p.add_argument("--start-date",  required=True, help="YYYY-MM-DD")
     p.add_argument("--end-date",    required=True, help="YYYY-MM-DD")
     args = p.parse_args()
