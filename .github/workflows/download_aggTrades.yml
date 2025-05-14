@@ -17,9 +17,7 @@ on:
 jobs:
   download-and-feature:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
@@ -43,70 +41,76 @@ jobs:
           echo "global_start=${{ github.event.inputs.start_date }}" >> $GITHUB_OUTPUT
           echo "global_end=${{ github.event.inputs.end_date }}"   >> $GITHUB_OUTPUT
 
-      - name: 📥 Download aggTrades ZIPs
+      - name: 🧹 Cleanup any leftovers
+        run: rm -rf data/aggTrades && mkdir -p data/aggTrades
+
+      - name: 🔁 Process all symbols sequentially
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          SDG=${{ steps.dates.outputs.global_start }}
-          ED=${{ steps.dates.outputs.global_end }}
+          for SYMBOL in BTCUSDT ETHUSDT BNBUSDT XRPUSDT SOLUSDT ENAUSDT; do
+            echo "▶️ Starting $SYMBOL"
 
-          # Inception-Tag für Überlappung
-          case "$SYMBOL" in
-            BTCUSDT|ETHUSDT) INC=2019-12-31;;
-            XRPUSDT)         INC=2020-01-06;;
-            BNBUSDT)         INC=2020-02-10;;
-            SOLUSDT)         INC=2020-09-14;;
-            ENAUSDT)         INC=2024-04-02;;
-            *)               INC=$SDG;;
-          esac
+            SDG=${{ steps.dates.outputs.global_start }}
+            ED=${{ steps.dates.outputs.global_end }}
 
-          if [[ "$SYMBOL" != "BTCUSDT" && "$SYMBOL" != "ETHUSDT" ]]; then
-            C=$INC
-            while ! curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/${SYMBOL}-aggTrades-$C.zip" -o /dev/null; do
-              C=$(date -I -d "$C +1 day")
-            done
-            INC=$C
-          fi
+            # === Download ===
+            # 1) Inception-Tag für Überlappung
+            case "$SYMBOL" in
+              BTCUSDT|ETHUSDT) INC=2019-12-31;;
+              XRPUSDT)         INC=2020-01-06;;
+              BNBUSDT)         INC=2020-02-10;;
+              SOLUSDT)         INC=2020-09-14;;
+              ENAUSDT)         INC=2024-04-02;;
+              *)               INC=$SDG;;
+            esac
 
-          SD_RAW=$(date -I -d "$SDG -1 day")
-          mkdir -p data/aggTrades/$SYMBOL
-
-          CUR="$SD_RAW"
-          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
-            ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
-            echo "→ Fetching $ZIP"
-            if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d data/aggTrades/$SYMBOL && rm -f "$ZIP"
-            else
-              echo "⚠️ Missing $ZIP – skipping" && rm -f "$ZIP" || true
+            if [[ "$SYMBOL" != "BTCUSDT" && "$SYMBOL" != "ETHUSDT" ]]; then
+              C=$INC
+              while ! curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/${SYMBOL}-aggTrades-$C.zip" -o /dev/null; do
+                C=$(date -I -d "$C +1 day")
+              done
+              INC=$C
             fi
-            CUR=$(date -I -d "$CUR +1 day")
+
+            SD_RAW=$(date -I -d "$SDG -1 day")
+            mkdir -p data/aggTrades/$SYMBOL
+
+            CUR="$SD_RAW"
+            while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
+              ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
+              echo "→ Fetching $ZIP"
+              if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
+                unzip -q -o "$ZIP" -d data/aggTrades/$SYMBOL && rm -f "$ZIP"
+              else
+                echo "⚠️ Missing $ZIP – skipping" && rm -f "$ZIP" || true
+              fi
+              CUR=$(date -I -d "$CUR +1 day")
+            done
+
+            # 2) Verzeichnis prüfen
+            if [ ! -d data/aggTrades/$SYMBOL ]; then
+              echo "❌ data/aggTrades/$SYMBOL missing" && exit 1
+            fi
+            echo "✅ data/aggTrades/$SYMBOL exists"
+
+            # === Feature Extraction ===
+            python3 extract_aggTrades_features.py \
+              --input-dir   data/aggTrades/$SYMBOL \
+              --output-file historical_tech/aggTrades/features/${SYMBOL}-features-${SDG}_to_${ED}.parquet \
+              --start-date  $SDG \
+              --end-date    $ED
+
+            # === Commit & Push ===
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add historical_tech/aggTrades/features/${SYMBOL}-features-${SDG}_to_${ED}.parquet
+            git commit -m "♻️ ${SYMBOL} Features ${SDG} to ${ED}" || echo "No changes for $SYMBOL"
+            git push https://x-access-token:${{ env.REPO_TOKEN }}@github.com/${{ env.REPO }} HEAD:main
+
+            # === Cleanup vor nächstem Symbol ===
+            rm -rf data/aggTrades/$SYMBOL
+            echo "🗑️ Cleaned up data/aggTrades/$SYMBOL"
+            echo "✅ Finished $SYMBOL"
           done
 
-      - name: ✔️ Prüfe Download-Ordner
-        run: |
-          if [ -d data/aggTrades/${{ matrix.symbol }} ]; then
-            echo "✅ data/aggTrades/${{ matrix.symbol }} exists"
-          else
-            echo "❌ data/aggTrades/${{ matrix.symbol }} missing" && exit 1
-          fi
-
-      - name: ⚙️ Extract Features → Parquet
-        run: |
-          python3 extract_aggTrades_features.py \
-            --input-dir   data/aggTrades/${{ matrix.symbol }} \
-            --output-file historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.global_end }}.parquet \
-            --start-date  ${{ steps.dates.outputs.global_start }} \
-            --end-date    ${{ steps.dates.outputs.global_end }}
-
-      - name: 🚀 Commit & Push
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          git add historical_tech/aggTrades/features/
-          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes to commit"
-          git push https://x-access-token:${{ env.REPO_TOKEN }}@github.com/${{ env.REPO }} HEAD:main
-
-      - name: 🧹 Cleanup
-        run: rm -rf data/aggTrades/${{ matrix.symbol }}
+      - name: 🧹 Final Cleanup
+        run: rm -rf data/aggTrades
