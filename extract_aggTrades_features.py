@@ -18,7 +18,7 @@ EXPECTED_COLS = [
 ]
 
 def read_aggtrade_csv(fn: str) -> pd.DataFrame:
-    # Erkennen, ob die erste Zeile Header ist
+    # Prüfen, ob Header vorhanden ist
     with open(fn, "r") as f:
         first = f.readline().strip().split(",")
     header = (first == EXPECTED_COLS)
@@ -33,38 +33,43 @@ def read_aggtrade_csv(fn: str) -> pd.DataFrame:
     return df
 
 def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    # Timestamp-Spalte erzeugen (UTC-aware)
+    # zeitstempel erzeugen und als Index (UTC-aware)
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
 
-    # Start/End als UTC-aware datetime
+    # Slice-Grenzen tz-aware machen
     sd = pd.to_datetime(start).tz_localize("UTC")
-    ed = (
-        pd.to_datetime(end).tz_localize("UTC")
-        + pd.Timedelta(days=1)
-        - pd.Timedelta(milliseconds=1)
-    )
-
-    # Slice
+    ed = pd.to_datetime(end).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     df = df[sd:ed]
+
     if df.empty:
-        logging.warning("⚠️ No trades between %s and %s.", start, end)
+        logging.warning("⚠️ No trades between %s and %s", start, end)
         return pd.DataFrame()
 
-    # Tägliches Aggregat
-    daily = df.resample("1D").agg(
-        total_volume=("quantity", "sum"),
-        buy_volume=("quantity", lambda x: x[~df.loc[x.index, "is_buyer_maker"]].sum()),
-        sell_volume=("quantity", lambda x: x[df.loc[x.index, "is_buyer_maker"]].sum()),
-        max_vol_1h=("quantity", lambda x: x.resample("1H").sum().max()),
-        max_vol_4h=("quantity", lambda x: x.resample("4H").sum().max()),
-        avg_trades_per_min=("quantity", lambda x: x.resample("1T").count().mean()),
-    )
-    daily["imbalance"] = (
-        daily["buy_volume"] - daily["sell_volume"]
-    ) / daily["total_volume"]
+    # 1-Tages‐Summe Gesamt, Buy, Sell
+    total = df["quantity"].resample("1D").sum()
+    buy   = df.loc[~df["is_buyer_maker"], "quantity"].resample("1D").sum()
+    sell  = df.loc[ df["is_buyer_maker"], "quantity"].resample("1D").sum()
 
-    return daily
+    # 1h/4h‐Maxima auf Tageslevel
+    max1h = df["quantity"].resample("1H").sum().resample("1D").max()
+    max4h = df["quantity"].resample("4H").sum().resample("1D").max()
+
+    # avg trades per minute pro Tag
+    avg_trades = df["quantity"].resample("1T").count().resample("1D").mean()
+
+    # DataFrame zusammenbauen
+    feats = pd.DataFrame({
+        "total_volume":        total,
+        "buy_volume":          buy,
+        "sell_volume":         sell,
+        "max_vol_1h":          max1h,
+        "max_vol_4h":          max4h,
+        "avg_trades_per_min":  avg_trades,
+    })
+    feats["imbalance"] = (feats["buy_volume"] - feats["sell_volume"]) / feats["total_volume"]
+
+    return feats
 
 def main(input_dir: str, output_file: str, start_date: str, end_date: str):
     logging.info("→ Reading CSVs from '%s'", input_dir)
@@ -73,18 +78,18 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
         logging.error("❌ No CSV files found in %s", input_dir)
         return
 
-    df_list = []
+    dfs = []
     for fn in files:
         try:
-            df_list.append(read_aggtrade_csv(fn))
+            dfs.append(read_aggtrade_csv(fn))
         except Exception as e:
             logging.error("Error reading %s: %s", fn, e)
 
-    if not df_list:
+    if not dfs:
         logging.error("❌ No valid data; exiting.")
         return
 
-    df = pd.concat(df_list, ignore_index=True)
+    df = pd.concat(dfs, ignore_index=True)
     logging.info("Combined DataFrame shape: %s", df.shape)
 
     feats = extract_features(df, start_date, end_date)
