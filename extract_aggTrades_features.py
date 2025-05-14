@@ -7,7 +7,7 @@ Lädt alle CSVs eines Symbols (mit einem Overlap-Tag) und berechnet pro Tag:
   - buy_volume, sell_volume
   - imbalance (clipped auf [-0.9, +0.9])
   - max_vol_1h, max_vol_4h
-  - avg_trades_per_min (Median statt Mean, um Ausreißer zu dämpfen)
+  - avg_trades_per_min (Median statt Mean)
 
 Schreibt Parquet-Output (Snappy-komprimiert) für ML.
 """
@@ -26,22 +26,22 @@ logging.basicConfig(
 )
 
 def compute_agg_features(df: pd.DataFrame) -> pd.DataFrame:
-    # Timestamp in UTC-Datetime umwandeln
+    # Timestamp → UTC-DatetimeIndex
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df = df.set_index("timestamp")
 
-    # buy vs. sell split
+    # buy vs. sell
     df["buy_volume"]  = df["quantity"].where(~df["isBuyerMaker"], 0.0)
     df["sell_volume"] = df["quantity"].where( df["isBuyerMaker"], 0.0)
 
     # Tages-Aggregate
     daily = df.resample("1D").agg(
-        total_volume = ("quantity", "sum"),
-        buy_volume   = ("buy_volume",  "sum"),
-        sell_volume  = ("sell_volume", "sum"),
+        total_volume      = ("quantity", "sum"),
+        buy_volume        = ("buy_volume", "sum"),
+        sell_volume       = ("sell_volume", "sum"),
     )
 
-    # Imbalance und Clipping
+    # Imbalance & Clip
     daily["imbalance"] = (
         (daily["buy_volume"] - daily["sell_volume"])
         / daily["total_volume"]
@@ -53,7 +53,7 @@ def compute_agg_features(df: pd.DataFrame) -> pd.DataFrame:
     daily["max_vol_1h"] = vol1h.resample("1D").max()
     daily["max_vol_4h"] = vol4h.resample("1D").max()
 
-    # avg_trades_per_min: Median Trades/Min
+    # Median Trades/Minute
     trades_per_min = df["quantity"].resample("1T").count()
     daily["avg_trades_per_min"] = trades_per_min.resample("1D").median()
 
@@ -61,10 +61,9 @@ def compute_agg_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def main(input_dir: str, output_file: str, start_date: str, end_date: str):
     logging.info(f"→ Reading CSVs from {input_dir!r}")
-    pattern = os.path.join(input_dir, "*.csv")
-    files = sorted(glob.glob(pattern))
+    files = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
     if not files:
-        logging.warning(f"Keine CSVs gefunden in {input_dir!r}, skip.")
+        logging.warning(f"No CSVs in {input_dir!r}, skipping.")
         return
 
     df_list = []
@@ -73,46 +72,50 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
             tmp = pd.read_csv(
                 fn,
                 header=None,
-                usecols=[4, 2, 5],          # 4=timestamp(ms), 2=quantity, 5=isBuyerMaker
+                usecols=[4,2,5],            # 4=timestamp(ms),2=quantity,5=isBuyerMaker
                 names=["timestamp","quantity","isBuyerMaker"],
                 dtype={"quantity":"float64", "isBuyerMaker":"int8"},
             )
-            # jetzt int8 → bool
-            tmp["isBuyerMaker"] = tmp["isBuyerMaker"].astype(bool)
+            # isBuyerMaker 0/1 → bool
+            tmp["isBuyerMaker"] = tmp["isBuyerMaker"] == 1
             df_list.append(tmp)
         except Exception as e:
-            logging.error(f"Error reading {fn}: {e}")
+            logging.error(f"Error reading {fn!r}: {e}")
 
     if not df_list:
-        logging.error("Kein Datensatz nach dem Einlesen, exit.")
+        logging.error("Kein Datensatz nach Einlesen, exit.")
         return
 
     df = pd.concat(df_list, ignore_index=True).drop_duplicates()
+    # Stamp als Int für between()
+    df["timestamp"] = df["timestamp"].astype("Int64")
 
-    # Filter auf Zeitfenster (inkl. Overlap-Tag)
-    start_ts = int(pd.to_datetime(start_date).timestamp() * 1000)
-    # end_date inclusive bis 23:59:59.999
-    end_ts   = int((pd.to_datetime(end_date)
-                    + pd.Timedelta(days=1)
-                    - pd.Timedelta(milliseconds=1)).timestamp() * 1000)
-    df = df.loc[df["timestamp"].between(start_ts, end_ts)]
+    # Zeit-Filter inkl. Overlap-Tag
+    start_ts = int(pd.to_datetime(start_date, utc=True).timestamp() * 1000)
+    end_ts   = int(
+        (pd.to_datetime(end_date, utc=True)
+         + pd.Timedelta(days=1)
+         - pd.Timedelta(milliseconds=1)
+        ).timestamp() * 1000
+    )
+    df = df[df["timestamp"].between(start_ts, end_ts)]
     if df.empty:
         logging.warning(f"No trades between {start_date} and {end_date}.")
         return
+    logging.info(f"Filtered DataFrame: {df.shape}")
 
-    logging.info(f"Combined DataFrame shape: {df.shape}")
-
-    # Features berechnen
+    # Feature-Engineering
     features = compute_agg_features(df)
-    # Drop overlap-Tag (alles ≤ start_date)
     before = features.shape[0]
+    # Drop Overlap-Tag (Datum == start_date)
+    sd = pd.to_datetime(start_date).date()
     features = features[
-        features["timestamp"].dt.normalize() > pd.to_datetime(start_date)
+        features["timestamp"].dt.normalize() > sd
     ]
-    after  = features.shape[0]
-    logging.info(f"Features before dropping overlap: {before}, after: {after}")
+    after = features.shape[0]
+    logging.info(f"Features rows before/after dropping overlap: {before}/{after}")
 
-    # Verzeichnisse anlegen & Parquet schreiben
+    # Parquet schreiben
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     features.to_parquet(
         output_file,
@@ -120,15 +123,15 @@ def main(input_dir: str, output_file: str, start_date: str, end_date: str):
         compression="snappy",
         engine="pyarrow"
     )
-    logging.info(f"[OK] Wrote {features.shape[0]} rows to {output_file!r}")
+    logging.info(f"[OK] Wrote {after} rows to {output_file!r}")
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
-        description="Extract aggTrades Features per symbol (inkl. 1-Tag Overlap)"
+        description="Extract aggTrades Features per symbol (inkl. Overlap-Tag)"
     )
     p.add_argument("--input-dir",   required=True, help="CSV-Ordner des Symbols")
-    p.add_argument("--output-file", required=True, help="Ziel-Parquet")
+    p.add_argument("--output-file", required=True, help="Ziel-Parquet-Datei")
     p.add_argument("--start-date",  required=True, help="YYYY-MM-DD")
     p.add_argument("--end-date",    required=True, help="YYYY-MM-DD")
     args = p.parse_args()
-    main(args.input_dir, args.output_file, args.start_date, args.end_date)
+    main(args.input_dir, args.output_dir if False else args.output_file, args.start_date, args.end_date)
