@@ -14,6 +14,28 @@ EXPECTED_COLS = [
     "transact_time","is_buyer_maker"
 ]
 
+def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
+    """
+    Liefert nur die CSV-Dateien, deren Datum im Dateinamen
+    zwischen (start - 1d) und end liegt.
+    """
+    sd = pd.to_datetime(start) - pd.Timedelta(days=1)
+    ed = pd.to_datetime(end)
+    paths = glob.glob(os.path.join(input_dir, "*.csv"))
+    filtered = []
+    for fn in paths:
+        base = os.path.basename(fn)
+        # z.B. BTCUSDT-aggTrades-2021-04-01.csv
+        try:
+            date_part = base.rsplit("-", 1)[1].replace(".csv", "")
+            dt = pd.to_datetime(date_part, format="%Y-%m-%d")
+        except Exception:
+            continue
+        if sd <= dt <= ed:
+            filtered.append(fn)
+    filtered.sort()
+    return filtered
+
 def read_aggtrade_csv(fn: str) -> pd.DataFrame:
     # Prüfen, ob Header vorhanden
     with open(fn, "r") as f:
@@ -64,8 +86,10 @@ def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     return feats
 
 def main(input_dir, output_file, start_date, end_date):
-    logging.info("→ Reading CSVs from '%s'", input_dir)
-    files = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
+    logging.info("→ Listing relevant CSVs from '%s'", input_dir)
+    files = list_relevant_files(input_dir, start_date, end_date)
+    logging.info("→ Found %d files to read", len(files))
+
     dfs = []
     for fn in files:
         try:
