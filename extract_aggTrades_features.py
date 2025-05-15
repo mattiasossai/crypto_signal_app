@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-import os, glob, argparse, logging
+import os
+import glob
+import sys
+import argparse
+import logging
 import pandas as pd
 
 logging.basicConfig(
@@ -9,32 +13,10 @@ logging.basicConfig(
 )
 
 EXPECTED_COLS = [
-    "agg_trade_id","price","quantity",
-    "first_trade_id","last_trade_id",
-    "transact_time","is_buyer_maker"
+    "agg_trade_id", "price", "quantity",
+    "first_trade_id", "last_trade_id",
+    "transact_time", "is_buyer_maker"
 ]
-
-def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
-    """
-    Liefert nur die CSV-Dateien, deren Datum im Dateinamen
-    zwischen (start - 1d) und end liegt.
-    """
-    sd = pd.to_datetime(start) - pd.Timedelta(days=1)
-    ed = pd.to_datetime(end)
-    paths = glob.glob(os.path.join(input_dir, "*.csv"))
-    filtered = []
-    for fn in paths:
-        base = os.path.basename(fn)
-        # z.B. BTCUSDT-aggTrades-2021-04-01.csv
-        try:
-            date_part = base.rsplit("-", 1)[1].replace(".csv", "")
-            dt = pd.to_datetime(date_part, format="%Y-%m-%d")
-        except Exception:
-            continue
-        if sd <= dt <= ed:
-            filtered.append(fn)
-    filtered.sort()
-    return filtered
 
 def read_aggtrade_csv(fn: str) -> pd.DataFrame:
     # Prüfen, ob Header vorhanden
@@ -46,19 +28,41 @@ def read_aggtrade_csv(fn: str) -> pd.DataFrame:
         fn,
         header=0 if header else None,
         names=EXPECTED_COLS if not header else None,
-        usecols=["quantity","transact_time","is_buyer_maker"],
+        usecols=["quantity", "transact_time", "is_buyer_maker"],
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
+
+def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
+    """
+    Liefert nur die CSV-Dateien, deren Datum im Dateinamen
+    zwischen (start - 1 Tag) und end liegt.
+    Trennt am Muster '-aggTrades-' und parsed YYYY-MM-DD.
+    """
+    sd = pd.to_datetime(start) - pd.Timedelta(days=1)
+    ed = pd.to_datetime(end)
+    all_paths = glob.glob(os.path.join(input_dir, "*.csv"))
+    filtered = []
+    for fn in all_paths:
+        base = os.path.basename(fn)
+        try:
+            date_part = base.split("-aggTrades-")[1].replace(".csv", "")
+            dt = pd.to_datetime(date_part, format="%Y-%m-%d")
+        except Exception:
+            continue
+        if sd <= dt <= ed:
+            filtered.append(fn)
+    filtered.sort()
+    return filtered
 
 def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     # 1) Timestamp & Index
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
-    df.sort_index(inplace=True)   # ← WICHTIG!
+    df.sort_index(inplace=True)
 
     # 2) Auf den gewünschten Zeitraum slicen
     sd = pd.to_datetime(start).tz_localize("UTC")
-    ed = pd.to_datetime(end).tz_localize("UTC") \
+    ed = pd.to_datetime(end).tz_localize("UTC")\
          + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     df = df[sd:ed]
 
@@ -88,7 +92,9 @@ def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
 def main(input_dir, output_file, start_date, end_date):
     logging.info("→ Listing relevant CSVs from '%s'", input_dir)
     files = list_relevant_files(input_dir, start_date, end_date)
-    logging.info("→ Found %d files to read", len(files))
+    if not files:
+        logging.error("❌ Found 0 files to read; exiting.")
+        sys.exit(1)
 
     dfs = []
     for fn in files:
@@ -96,16 +102,18 @@ def main(input_dir, output_file, start_date, end_date):
             dfs.append(read_aggtrade_csv(fn))
         except Exception as e:
             logging.error("Error reading %s: %s", fn, e)
+
     if not dfs:
-        logging.error("❌ No valid data; exiting.")
-        return
+        logging.error("❌ No valid data after read; exiting.")
+        sys.exit(1)
 
     df = pd.concat(dfs, ignore_index=True)
     logging.info("Combined DataFrame shape: %s", df.shape)
 
     feats = extract_features(df, start_date, end_date)
     if feats.empty:
-        return
+        logging.error("❌ Feature extraction yielded empty DataFrame; exiting.")
+        sys.exit(1)
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     feats.to_parquet(output_file, index=True, compression="snappy")
