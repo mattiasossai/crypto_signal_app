@@ -1,9 +1,10 @@
-name: test
+name: testing
 
 on:
-workflow_dispatch
+  workflow_dispatch:
+ 
 jobs:
-  where-am-i:
+   where-am-i:
     runs-on: self-hosted
     steps:
       - name: Print cwd & disk usage
