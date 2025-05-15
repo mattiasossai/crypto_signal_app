@@ -25,8 +25,11 @@ jobs:
     steps:
       - name: 🧹 Clean old artifacts
         run: |
+          # ZIPs und rohe CSVs entfernen
           find . -maxdepth 1 -type f -name '*.zip' -print -delete
           rm -rf data/aggTrades/${{ matrix.symbol }}
+          # Alte Parquet-Files im Workspace entfernen (nicht im Git-Repo!)
+          rm -f historical_tech/aggTrades/features/${{ matrix.symbol }}-features-*.parquet
 
       - name: Checkout
         uses: actions/checkout@v4
