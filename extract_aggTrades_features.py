@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import glob
-import sys
 import argparse
 import logging
 import pandas as pd
@@ -18,13 +17,17 @@ EXPECTED_COLS = [
     "transact_time", "is_buyer_maker"
 ]
 
-def read_aggtrade_csv(fn: str) -> pd.DataFrame:
-    # Erkennung, ob die erste Zeile ein Header ist
+def process_one_file(fn: str, start: str, end: str) -> dict | None:
+    """
+    MODIFIED: Einlesen und sofortige Tages-Aggregation pro Datei, 
+    anstatt alle DataFrames in einer Liste zu sammeln.
+    """
+    # Header-Erkennung wie vorher
     with open(fn, "r") as f:
         tokens = f.readline().strip().split(",")
     header = tokens == EXPECTED_COLS
 
-    return pd.read_csv(
+    df = pd.read_csv(
         fn,
         header=0 if header else None,
         names=EXPECTED_COLS if not header else None,
@@ -32,98 +35,75 @@ def read_aggtrade_csv(fn: str) -> pd.DataFrame:
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
 
-def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
-    """Filtert nur die .csv zwischen (start-1) und end anhand des Datums im Dateinamen."""
-    sd = pd.to_datetime(start) - pd.Timedelta(days=1)
-    ed = pd.to_datetime(end)
-    all_csv = glob.glob(os.path.join(input_dir, "*.csv"))
-    out = []
-    for fn in all_csv:
-        base = os.path.basename(fn)
-        if "-aggTrades-" not in base:
-            continue
-        date_str = base.split("-aggTrades-")[1].replace(".csv", "")
-        try:
-            dt = pd.to_datetime(date_str, format="%Y-%m-%d")
-        except ValueError:
-            continue
-        if sd <= dt <= ed:
-            out.append(fn)
-    out.sort()
-    return out
-
-def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    # 1) timestamp
+    # Zeitindex setzen und auf Tagesfenster slicen
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
-    df.sort_index(inplace=True)
+    day_str = os.path.basename(fn).split("-aggTrades-")[1].replace(".csv", "")
+    sd = pd.to_datetime(day_str).tz_localize("UTC")
+    ed = sd + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+    df_day = df[sd:ed]
+    if df_day.empty:
+        logging.warning("Empty data for %s", day_str)
+        return None
 
-    # 2) slice auf [start, end 23:59:59.999]
-    sd = pd.to_datetime(start).tz_localize("UTC")
-    ed = pd.to_datetime(end).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-    df = df[sd:ed]
-    if df.empty:
-        logging.error("❌ No trades between %s and %s", start, end)
-        return pd.DataFrame()
+    # Tages-Aggregationen wie vorher
+    total   = df_day["quantity"].sum()
+    buy     = df_day.loc[~df_day["is_buyer_maker"], "quantity"].sum()
+    sell    = df_day.loc[ df_day["is_buyer_maker"],  "quantity"].sum()
+    max1h   = df_day["quantity"].resample("1h").sum().max()
+    max4h   = df_day["quantity"].resample("4h").sum().max()
+    avg_trd = df_day["quantity"].resample("1T").count().mean()
+    imbalance = (buy - sell) / total if total > 0 else 0
 
-    # 3) Tages-Aggregationen
-    total   = df["quantity"].resample("1D").sum()
-    buy     = df.loc[~df["is_buyer_maker"], "quantity"].resample("1D").sum()
-    sell    = df.loc[ df["is_buyer_maker"], "quantity"].resample("1D").sum()
-    max1h   = df["quantity"].resample("1h").sum().resample("1D").max()
-    max4h   = df["quantity"].resample("4h").sum().resample("1D").max()
-    avg_trd = df["quantity"].resample("1T").count().resample("1D").mean()
-
-    feats = pd.DataFrame({
-        "total_volume":       total,
-        "buy_volume":         buy,
-        "sell_volume":        sell,
-        "max_vol_1h":         max1h,
-        "max_vol_4h":         max4h,
+    return {
+        "date": day_str,
+        "total_volume": total,
+        "buy_volume": buy,
+        "sell_volume": sell,
+        "max_vol_1h": max1h,
+        "max_vol_4h": max4h,
         "avg_trades_per_min": avg_trd,
-    })
-    feats["imbalance"] = (feats["buy_volume"] - feats["sell_volume"]) / feats["total_volume"]
-    return feats
+        "imbalance": imbalance,
+    }
 
 def main(input_dir, output_file, start_date, end_date):
-    logging.info("→ Listing relevant CSVs from '%s'", input_dir)
-    files = list_relevant_files(input_dir, start_date, end_date)
+    logging.info("→ Scanne CSVs in '%s'", input_dir)
+    all_csv = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
+
+    # Filter nach Datumsbereich (inkl. start-1)
+    sd = pd.to_datetime(start_date) - pd.Timedelta(days=1)
+    ed = pd.to_datetime(end_date)
+    files = [
+        fn for fn in all_csv
+        if sd <= pd.to_datetime(os.path.basename(fn).split("-aggTrades-")[1][:10]) <= ed
+    ]
+
     if not files:
-        logging.error("❌ Found 0 files to read; exiting.")
-        sys.exit(1)
+        logging.error("❌ Keine .csv-Dateien im Zeitraum gefunden; beende.")
+        return
 
-    dfs = []
+    # MODIFIED: pro Datei verarbeiten und Ergebnisse sammeln
+    rows = []
     for fn in files:
-        try:
-            dfs.append(read_aggtrade_csv(fn))
-        except Exception as e:
-            logging.error("Error reading %s: %s", fn, e)
-    if not dfs:
-        logging.error("❌ No valid data after read; exiting.")
-        sys.exit(1)
+        result = process_one_file(fn, start_date, end_date)
+        if result is not None:
+            rows.append(result)
 
-    df = pd.concat(dfs, ignore_index=True)
-    logging.info("Combined DataFrame shape: %s", df.shape)
+    if not rows:
+        logging.error("❌ Keine Daten nach Verarbeitung; beende.")
+        return
 
-    feats = extract_features(df, start_date, end_date)
-    if feats.empty:
-        logging.error("❌ Feature extraction yielded empty DataFrame; exiting.")
-        sys.exit(1)
-
+    # Kleiner DataFrame mit n Zeilen statt riesigem Concat
+    df_feats = pd.DataFrame(rows).set_index("date").sort_index()
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    feats.to_parquet(output_file, index=True, compression="snappy")
-    logging.info("✅ Wrote features to %s", output_file)
-
-    # 5) Unmittelbare Prüfung: existiert nicht-leere Datei?
-    if not os.path.isfile(output_file) or os.path.getsize(output_file) == 0:
-        logging.error("❌ Output file %s missing or empty; exiting.", output_file)
-        sys.exit(1)
+    df_feats.to_parquet(output_file, compression="snappy")
+    logging.info("✅ Geschriebene Features: %s (%d Tage)", output_file, len(df_feats))
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--input-dir",   required=True)
-    p.add_argument("--output-file", required=True)
-    p.add_argument("--start-date",  required=True)
-    p.add_argument("--end-date",    required=True)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-dir",   required=True)
+    parser.add_argument("--output-file", required=True)
+    parser.add_argument("--start-date",  required=True)
+    parser.add_argument("--end-date",    required=True)
+    args = parser.parse_args()
     main(args.input_dir, args.output_file, args.start_date, args.end_date)
