@@ -19,7 +19,7 @@ EXPECTED_COLS = [
 ]
 
 def read_aggtrade_csv(fn: str) -> pd.DataFrame:
-    # Prüfen, ob Header vorhanden
+    # prüft, ob in der ersten Zeile ein Header steht
     with open(fn, "r") as f:
         first = f.readline().strip().split(",")
     header = (first == EXPECTED_COLS)
@@ -34,9 +34,8 @@ def read_aggtrade_csv(fn: str) -> pd.DataFrame:
 
 def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
     """
-    Liefert nur die CSV-Dateien, deren Datum im Dateinamen
-    zwischen (start - 1 Tag) und end liegt.
-    Trennt am Muster '-aggTrades-' und parsed YYYY-MM-DD.
+    Nur CSVs zwischen start-1 Tag und end anhand des Datums im Dateinamen filtern.
+    Trennt am Muster '-aggTrades-YYYY-MM-DD.csv'.
     """
     sd = pd.to_datetime(start) - pd.Timedelta(days=1)
     ed = pd.to_datetime(end)
@@ -44,10 +43,12 @@ def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
     filtered = []
     for fn in all_paths:
         base = os.path.basename(fn)
+        if "-aggTrades-" not in base:
+            continue
+        date_part = base.split("-aggTrades-")[1].replace(".csv", "")
         try:
-            date_part = base.split("-aggTrades-")[1].replace(".csv", "")
             dt = pd.to_datetime(date_part, format="%Y-%m-%d")
-        except Exception:
+        except ValueError:
             continue
         if sd <= dt <= ed:
             filtered.append(fn)
@@ -60,9 +61,9 @@ def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     df.set_index("timestamp", inplace=True)
     df.sort_index(inplace=True)
 
-    # 2) Auf den gewünschten Zeitraum slicen
+    # 2) slice auf den Zeitraum [start, end+23:59:59.999]
     sd = pd.to_datetime(start).tz_localize("UTC")
-    ed = pd.to_datetime(end).tz_localize("UTC")\
+    ed = pd.to_datetime(end).tz_localize("UTC") \
          + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     df = df[sd:ed]
 
@@ -118,6 +119,11 @@ def main(input_dir, output_file, start_date, end_date):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     feats.to_parquet(output_file, index=True, compression="snappy")
     logging.info("✅ Wrote features to %s", output_file)
+
+    # **Unmittelbare Prüfung, ob die Datei existiert und nicht leer ist**
+    if not os.path.isfile(output_file) or os.path.getsize(output_file) == 0:
+        logging.error("❌ Output file %s is missing or empty; exiting.", output_file)
+        sys.exit(1)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
