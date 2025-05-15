@@ -19,10 +19,10 @@ EXPECTED_COLS = [
 ]
 
 def read_aggtrade_csv(fn: str) -> pd.DataFrame:
-    # prüft, ob in der ersten Zeile ein Header steht
+    # Erkennung, ob die erste Zeile ein Header ist
     with open(fn, "r") as f:
-        first = f.readline().strip().split(",")
-    header = (first == EXPECTED_COLS)
+        tokens = f.readline().strip().split(",")
+    header = tokens == EXPECTED_COLS
 
     return pd.read_csv(
         fn,
@@ -33,42 +33,37 @@ def read_aggtrade_csv(fn: str) -> pd.DataFrame:
     )
 
 def list_relevant_files(input_dir: str, start: str, end: str) -> list[str]:
-    """
-    Nur CSVs zwischen start-1 Tag und end anhand des Datums im Dateinamen filtern.
-    Trennt am Muster '-aggTrades-YYYY-MM-DD.csv'.
-    """
+    """Filtert nur die .csv zwischen (start-1) und end anhand des Datums im Dateinamen."""
     sd = pd.to_datetime(start) - pd.Timedelta(days=1)
     ed = pd.to_datetime(end)
-    all_paths = glob.glob(os.path.join(input_dir, "*.csv"))
-    filtered = []
-    for fn in all_paths:
+    all_csv = glob.glob(os.path.join(input_dir, "*.csv"))
+    out = []
+    for fn in all_csv:
         base = os.path.basename(fn)
         if "-aggTrades-" not in base:
             continue
-        date_part = base.split("-aggTrades-")[1].replace(".csv", "")
+        date_str = base.split("-aggTrades-")[1].replace(".csv", "")
         try:
-            dt = pd.to_datetime(date_part, format="%Y-%m-%d")
+            dt = pd.to_datetime(date_str, format="%Y-%m-%d")
         except ValueError:
             continue
         if sd <= dt <= ed:
-            filtered.append(fn)
-    filtered.sort()
-    return filtered
+            out.append(fn)
+    out.sort()
+    return out
 
 def extract_features(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    # 1) Timestamp & Index
+    # 1) timestamp
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
     df.sort_index(inplace=True)
 
-    # 2) slice auf den Zeitraum [start, end+23:59:59.999]
+    # 2) slice auf [start, end 23:59:59.999]
     sd = pd.to_datetime(start).tz_localize("UTC")
-    ed = pd.to_datetime(end).tz_localize("UTC") \
-         + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+    ed = pd.to_datetime(end).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     df = df[sd:ed]
-
     if df.empty:
-        logging.warning("⚠️ No trades between %s and %s", start, end)
+        logging.error("❌ No trades between %s and %s", start, end)
         return pd.DataFrame()
 
     # 3) Tages-Aggregationen
@@ -103,7 +98,6 @@ def main(input_dir, output_file, start_date, end_date):
             dfs.append(read_aggtrade_csv(fn))
         except Exception as e:
             logging.error("Error reading %s: %s", fn, e)
-
     if not dfs:
         logging.error("❌ No valid data after read; exiting.")
         sys.exit(1)
@@ -120,9 +114,9 @@ def main(input_dir, output_file, start_date, end_date):
     feats.to_parquet(output_file, index=True, compression="snappy")
     logging.info("✅ Wrote features to %s", output_file)
 
-    # **Unmittelbare Prüfung, ob die Datei existiert und nicht leer ist**
+    # 5) Unmittelbare Prüfung: existiert nicht-leere Datei?
     if not os.path.isfile(output_file) or os.path.getsize(output_file) == 0:
-        logging.error("❌ Output file %s is missing or empty; exiting.", output_file)
+        logging.error("❌ Output file %s missing or empty; exiting.", output_file)
         sys.exit(1)
 
 if __name__ == "__main__":
