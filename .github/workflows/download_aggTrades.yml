@@ -23,9 +23,12 @@ jobs:
       REPO:       ${{ github.repository }}
 
     steps:
+      # ────────────────────────────────────────────────────────────────────────────
       - name: 🧹 Clean old artifacts
         run: |
-          rm -f *.zip
+          # alle ZIPs im Workspace löschen
+          find . -maxdepth 1 -type f -name '*.zip' -print -delete
+          # CSV-Ordner des Symbols komplett entfernen
           rm -rf data/aggTrades/${{ matrix.symbol }}
 
       - name: Checkout
@@ -40,7 +43,7 @@ jobs:
           python-version: '3.12'
       - run: |
           sudo apt-get update
-          sudo apt-get install -y unzip curl
+          sudo apt-get install -y curl unzip
           pip3 install --upgrade pip pandas numpy pyarrow
 
       - name: Calc dates
@@ -58,21 +61,21 @@ jobs:
 
           # 1) Inception-Datum festlegen
           case "$SYMBOL" in
-            BTCUSDT|ETHUSDT) INC=2019-12-31;;
-            XRPUSDT)         INC=2020-01-06;;
-            BNBUSDT)         INC=2020-02-10;;
-            SOLUSDT)         INC=2020-09-14;;
-            ENAUSDT)         INC=2024-04-02;;
-            *)               INC=$SDG;;
+            BTCUSDT|ETHUSDT) INC=2019-12-31 ;;
+            XRPUSDT)         INC=2020-01-06 ;;
+            BNBUSDT)         INC=2020-02-10 ;;
+            SOLUSDT)         INC=2020-09-14 ;;
+            ENAUSDT)         INC=2024-04-02 ;;
+            *)               INC=$SDG       ;;
           esac
 
-          # 2) Für alle außer BTCUSDT INC auf erstes existierendes Datum schieben
+          # 2) Auf echtes erstes File schieben (außer BTCUSDT)
           if [ "$SYMBOL" != "BTCUSDT" ]; then
             CAND="$INC"
             until curl -sSf \
-                "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$SYMBOL-aggTrades-$CAND.zip" \
-                -o /dev/null; do
-              CAND=$(date -I -d "$CAND +1 day")
+              "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$SYMBOL-aggTrades-$CAND.zip" \
+              -o /dev/null; do
+                CAND=$(date -I -d "$CAND +1 day")
             done
             INC=$CAND
           fi
@@ -82,7 +85,7 @@ jobs:
           t2=$(date -d"$INC" +%s)
           if [ $t1 -lt $t2 ]; then SD="$INC"; else SD="$SDG"; fi
 
-          # 4) Download‐Loop inkl. Überlappungstag (SD-1)
+          # 4) Download-Loop inkl. Überlappungstag (SD-1)
           SD_RAW=$(date -I -d "$SD -1 day")
           DIR=data/aggTrades/$SYMBOL
           mkdir -p "$DIR"
@@ -129,7 +132,11 @@ jobs:
           git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
           git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
 
+      # ────────────────────────────────────────────────────────────────────────────
       - name: Cleanup raw data
         if: always()
         run: |
-          rm -rf data/aggTrades/${{ matrix.symbol }} *.zip
+          # alle verbliebenen ZIPs löschen
+          find . -maxdepth 1 -type f -name '*.zip' -print -delete
+          # CSV-Ordner des Symbols entfernen
+          rm -rf data/aggTrades/${{ matrix.symbol }}
