@@ -43,13 +43,14 @@ jobs:
           echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
           echo "global_end=${{ inputs.end_date }}"   >> $GITHUB_OUTPUT
 
-      - name: Download & unzip bookDepth
+      - name: Download bookDepth CSVs
+        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           SDG=${{ steps.dates.outputs.global_start }}
           ED=${{ steps.dates.outputs.global_end }}
 
-          # 1) Symbol-Inception (erstes bookDepth-File)
+          # 1) Symbol-Inception
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
@@ -69,13 +70,14 @@ jobs:
 
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
-            F="bookDepth/${SYMBOL}/${SYMBOL}-bookDepth-${CUR}.csv"
-            URL="https://data.binance.vision/data/futures/um/daily/$F"
-            echo "→ Fetching ${F##*/}"
-            if curl -sSf "$URL" -o "$CUR.csv"; then
-              mv "$CUR.csv" "$DIR/"
+            FNAME="$SYMBOL-bookDepth-$CUR.csv"
+            URL="https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$FNAME"
+            echo "→ Fetching $FNAME"
+            if curl -sSf "$URL" -o "$FNAME"; then
+              mv "$FNAME" "$DIR/"
             else
-              echo "⚠️ Missing ${F##*/}, skipping"
+              echo "⚠️ Missing $FNAME, skipping"
+              rm -f "$FNAME"
             fi
             CUR=$(date -I -d "$CUR +1 day")
           done
@@ -106,3 +108,8 @@ jobs:
           git add historical_tech/bookDepth/features
           git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
           git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
+
+      - name: Cleanup raw data
+        if: always()
+        run: |
+          rm -rf data/bookDepth/${{ matrix.symbol }}
