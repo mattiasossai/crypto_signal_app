@@ -17,12 +17,8 @@ EXPECTED_COLS = [
     "transact_time", "is_buyer_maker"
 ]
 
-def process_one_file(fn: str, start: str, end: str) -> dict | None:
-    """
-    MODIFIED: Einlesen und sofortige Tages-Aggregation pro Datei, 
-    anstatt alle DataFrames in einer Liste zu sammeln.
-    """
-    # Header-Erkennung wie vorher
+def process_one_file(fn: str) -> dict | None:
+    # Header detection unchanged
     with open(fn, "r") as f:
         tokens = f.readline().strip().split(",")
     header = tokens == EXPECTED_COLS
@@ -35,24 +31,25 @@ def process_one_file(fn: str, start: str, end: str) -> dict | None:
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
 
-    # Zeitindex setzen und auf Tagesfenster slicen
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
+
     day_str = os.path.basename(fn).split("-aggTrades-")[1].replace(".csv", "")
     sd = pd.to_datetime(day_str).tz_localize("UTC")
     ed = sd + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     df_day = df[sd:ed]
+
     if df_day.empty:
         logging.warning("Empty data for %s", day_str)
         return None
 
-    # Tages-Aggregationen wie vorher
     total   = df_day["quantity"].sum()
     buy     = df_day.loc[~df_day["is_buyer_maker"], "quantity"].sum()
     sell    = df_day.loc[ df_day["is_buyer_maker"],  "quantity"].sum()
     max1h   = df_day["quantity"].resample("1h").sum().max()
     max4h   = df_day["quantity"].resample("4h").sum().max()
-    avg_trd = df_day["quantity"].resample("1T").count().mean()
+    # UPDATED: use "1min" instead of deprecated "1T"
+    avg_trd = df_day["quantity"].resample("1min").count().mean()
     imbalance = (buy - sell) / total if total > 0 else 0
 
     return {
@@ -67,10 +64,10 @@ def process_one_file(fn: str, start: str, end: str) -> dict | None:
     }
 
 def main(input_dir, output_file, start_date, end_date):
-    logging.info("→ Scanne CSVs in '%s'", input_dir)
+    logging.info("→ Scanning CSVs in '%s'", input_dir)
     all_csv = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
 
-    # Filter nach Datumsbereich (inkl. start-1)
+    # UPDATED: include overlap day
     sd = pd.to_datetime(start_date) - pd.Timedelta(days=1)
     ed = pd.to_datetime(end_date)
     files = [
@@ -79,31 +76,33 @@ def main(input_dir, output_file, start_date, end_date):
     ]
 
     if not files:
-        logging.error("❌ Keine .csv-Dateien im Zeitraum gefunden; beende.")
+        logging.error("❌ No CSV files found in range; exiting.")
         return
 
-    # MODIFIED: pro Datei verarbeiten und Ergebnisse sammeln
     rows = []
     for fn in files:
-        result = process_one_file(fn, start_date, end_date)
-        if result is not None:
-            rows.append(result)
+        r = process_one_file(fn)
+        if r is not None:
+            rows.append(r)
 
     if not rows:
-        logging.error("❌ Keine Daten nach Verarbeitung; beende.")
+        logging.error("❌ No data after processing; exiting.")
         return
 
-    # Kleiner DataFrame mit n Zeilen statt riesigem Concat
     df_feats = pd.DataFrame(rows).set_index("date").sort_index()
+
+    # UPDATED: drop the overlap day before writing
+    df_feats = df_feats.loc[df_feats.index >= start_date]
+
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     df_feats.to_parquet(output_file, compression="snappy")
-    logging.info("✅ Geschriebene Features: %s (%d Tage)", output_file, len(df_feats))
+    logging.info("✅ Wrote features to %s (%d days)", output_file, len(df_feats))
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir",   required=True)
-    parser.add_argument("--output-file", required=True)
-    parser.add_argument("--start-date",  required=True)
-    parser.add_argument("--end-date",    required=True)
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--input-dir",   required=True)
+    p.add_argument("--output-file", required=True)
+    p.add_argument("--start-date",  required=True)
+    p.add_argument("--end-date",    required=True)
+    args = p.parse_args()
     main(args.input_dir, args.output_file, args.start_date, args.end_date)
