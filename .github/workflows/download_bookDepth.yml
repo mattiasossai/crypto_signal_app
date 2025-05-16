@@ -35,7 +35,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pandas pyarrow scipy
+          pip install --upgrade pandas pyarrow
 
       - name: Calc dates
         id: dates
@@ -69,6 +69,7 @@ jobs:
           mkdir -p "$DIR"
 
           CUR="$SD"
+          echo "→ Using start $SD (incorporates inception)"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             echo "→ Fetching $ZIP"
