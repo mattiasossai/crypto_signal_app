@@ -35,7 +35,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pandas pyarrow
+          pip install --upgrade pandas pyarrow scipy
 
       - name: Calc dates
         id: dates
