@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Startdatum (YYYY-MM-DD) für Jahres-Fenster'
+        description: 'Startdatum (YYYY-MM-DD) für 6-Monats-Fenster'
         required: true
       end_date:
-        description: 'Enddatum (YYYY-MM-DD) für Jahres-Fenster'
+        description: 'Enddatum (YYYY-MM-DD) für 6-Monats-Fenster'
         required: true
 
 jobs:
   download-and-feature:
     name: Download & Feature ${{ matrix.symbol }}
-    runs-on: self-hosted
+    runs-on: ubuntu-latest    # oder ubuntu-latest
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
@@ -25,11 +25,8 @@ jobs:
     steps:
       - name: 🧹 Clean old artifacts
         run: |
-          # ZIPs und rohe CSVs entfernen
           find . -maxdepth 1 -type f -name '*.zip' -print -delete
           rm -rf data/aggTrades/${{ matrix.symbol }}
-          # Alte Parquet-Files im Workspace entfernen (nicht im Git-Repo!)
-          rm -f historical_tech/aggTrades/features/${{ matrix.symbol }}-features-*.parquet
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,49 +49,46 @@ jobs:
           echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
           echo "global_end=${{ inputs.end_date   }}" >> $GITHUB_OUTPUT
 
-      - name: Download & unzip raw data with Overlap & Inception
+      - name: Download & extract raw data with Overlap & Inception
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           SDG=${{ steps.dates.outputs.global_start }}
           ED=${{ steps.dates.outputs.global_end }}
 
+          # 1) Symbol-Inception
           case "$SYMBOL" in
-            BTCUSDT|ETHUSDT) INC=2019-12-31 ;;
-            XRPUSDT)         INC=2020-01-06 ;;
-            BNBUSDT)         INC=2020-02-10 ;;
-            SOLUSDT)         INC=2020-09-14 ;;
-            ENAUSDT)         INC=2024-04-02 ;;
-            *)               INC=$SDG       ;;
+            BTCUSDT|ETHUSDT) INC="2019-12-31" ;;
+            XRPUSDT)         INC="2020-01-06" ;;
+            BNBUSDT)         INC="2020-02-10" ;;
+            SOLUSDT)         INC="2020-09-14" ;;
+            ENAUSDT)         INC="2024-04-02" ;;
+            *)               INC=$SDG        ;;
           esac
 
-          if [ "$SYMBOL" != "BTCUSDT" ]; then
-            CAND="$INC"
-            until curl -sSf \
-              "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$SYMBOL-aggTrades-$CAND.zip" \
-              -o /dev/null; do
-                CAND=$(date -I -d "$CAND +1 day")
-            done
-            INC=$CAND
+          # 2) effektiver Start = max(global_start, INC)
+          if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
+            SD="$INC"
+          else
+            SD="$SDG"
           fi
 
-          t1=$(date -d"$SDG" +%s)
-          t2=$(date -d"$INC" +%s)
-          if [ $t1 -lt $t2 ]; then SD="$INC"; else SD="$SDG"; fi
-
-          SD_RAW=$(date -I -d "$SD -1 day")
           DIR=data/aggTrades/$SYMBOL
           mkdir -p "$DIR"
 
-          CUR="$SD_RAW"
+          # 3) Download mit 1-Tag Overlap (Start-1) und unzip-p
+          CUR=$(date -I -d "$SD -1 day")
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             echo "→ Fetching $ZIP"
-            if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$DIR" && rm -f "$ZIP"
+            if curl -sSf \
+                 "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" \
+                 -o "$ZIP"; then
+              unzip -p "$ZIP" > "$DIR/${ZIP%.zip}.csv"
+              rm -f "$ZIP"
             else
               echo "⚠️ Missing $ZIP – skipping"
-              rm -f "$ZIP" || true
+              rm -f "$ZIP"
             fi
             CUR=$(date -I -d "$CUR +1 day")
           done
@@ -123,11 +117,9 @@ jobs:
           git checkout main
           git pull --rebase origin main
           git add historical_tech/aggTrades/features
-          git commit -m "♻️ ${{ matrix.symbol }} Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
           git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
 
       - name: Cleanup raw data
         if: always()
-        run: |
-          find . -maxdepth 1 -type f -name '*.zip' -print -delete
-          rm -rf data/aggTrades/${{ matrix.symbol }}
+        run: rm -rf data/aggTrades/${{ matrix.symbol }}
