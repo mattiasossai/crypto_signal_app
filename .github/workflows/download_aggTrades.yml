@@ -38,11 +38,10 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      - name: Install dependencies
-        run: |
+      - run: |
           sudo apt-get update
           sudo apt-get install -y curl unzip
-          pip3 install --upgrade pip pandas numpy pyarrow scipy
+          pip3 install --upgrade pip pandas numpy pyarrow
 
       - name: Calc dates
         id: dates
@@ -64,7 +63,7 @@ jobs:
             BNBUSDT)         INC="2020-02-10" ;;
             SOLUSDT)         INC="2020-09-14" ;;
             ENAUSDT)         INC="2024-04-02" ;;
-            *)               INC=$SDG        ;;
+            *)               INC=$SDG      ;;
           esac
 
           # 2) effektiver Start = max(global_start, INC)
