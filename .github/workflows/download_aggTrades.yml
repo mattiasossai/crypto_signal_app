@@ -38,10 +38,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      - run: |
+      - name: Install dependencies
+        run: |
           sudo apt-get update
           sudo apt-get install -y curl unzip
-          pip3 install --upgrade pip pandas numpy pyarrow
+          pip3 install --upgrade pip pandas numpy pyarrow scipy
 
       - name: Calc dates
         id: dates
@@ -63,7 +64,7 @@ jobs:
             BNBUSDT)         INC="2020-02-10" ;;
             SOLUSDT)         INC="2020-09-14" ;;
             ENAUSDT)         INC="2024-04-02" ;;
-            *)               INC=$SDG      ;;
+            *)               INC=$SDG        ;;
           esac
 
           # 2) effektiver Start = max(global_start, INC)
@@ -78,6 +79,7 @@ jobs:
 
           # 3) Download mit 1-Tag Overlap (Start-1) und unzip-p
           CUR=$(date -I -d "$SD -1 day")
+          echo "→ Using start $SD (incorp. inception)"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             echo "→ Fetching $ZIP"
