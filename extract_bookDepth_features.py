@@ -4,8 +4,9 @@ import glob
 import argparse
 import pandas as pd
 import numpy as np
+from scipy.stats import skew, kurtosis
 
-# Symbol-spezifische Start-/Inception-Daten
+# Symbol-spezifische Inception-Daten
 INCEPTION = {
     "BTCUSDT": "2023-01-01",
     "ETHUSDT": "2023-01-01",
@@ -16,7 +17,6 @@ INCEPTION = {
 }
 
 def fp_contains_header(fp: str) -> bool:
-    """Gibt True zurück, wenn die erste Spalte kein Integer ist → Header vorhanden."""
     with open(fp, "r") as f:
         first = f.readline().split(",")[0]
     return not first.isdigit()
@@ -25,8 +25,8 @@ def extract_features(input_dir: str, start_date: str, end_date: str) -> pd.DataF
     files = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
     sym = os.path.basename(input_dir)
     inc_date = pd.to_datetime(INCEPTION.get(sym, start_date))
-
     dfs = []
+
     for fp in files:
         day_str = os.path.basename(fp).replace(".csv", "")
         day = pd.to_datetime(day_str, errors="coerce")
@@ -38,15 +38,11 @@ def extract_features(input_dir: str, start_date: str, end_date: str) -> pd.DataF
             header=0 if fp_contains_header(fp) else None,
             names=["timestamp", "percentage", "depth", "notional"],
         )
-
-        # —— NEU: robustes Timestamp-Parsen ——
-        # falls numerisch (ms seit Epoch), sonst parse als String
+        # robustes Timestamp-Parsen
         if np.issubdtype(df["timestamp"].dtype, np.number):
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
         else:
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        # ————————————————————————————————
-
         df.set_index("timestamp", inplace=True)
         dfs.append(df)
 
@@ -55,7 +51,7 @@ def extract_features(input_dir: str, start_date: str, end_date: str) -> pd.DataF
 
     full = pd.concat(dfs).sort_index()
 
-    # Fenster auf [start_date, end_date] schneiden
+    # auf Window schneiden
     sd = pd.to_datetime(start_date).tz_localize("UTC")
     ed = pd.to_datetime(end_date).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(ms=1)
     full = full[sd:ed]
@@ -64,46 +60,100 @@ def extract_features(input_dir: str, start_date: str, end_date: str) -> pd.DataF
     total_notional = full["notional"].sum()
     total_depth    = full["depth"].sum()
 
-    # 2) 1%-Bin
-    mask1 = full["percentage"].abs() <= 1.0
-    notional_1pct = full.loc[mask1, "notional"].sum()
-    depth_1pct    = full.loc[mask1, "depth"].sum()
-
-    # 3) 10%-Bin
-    mask10 = full["percentage"].abs() <= 10.0
+    # 2) feste %-Bins
+    mask1   = full["percentage"].abs() <= 1.0
+    mask10  = full["percentage"].abs() <= 10.0
+    notional_1pct  = full.loc[mask1,  "notional"].sum()
+    depth_1pct     = full.loc[mask1,  "depth"].sum()
     notional_10pct = full.loc[mask10, "notional"].sum()
     depth_10pct    = full.loc[mask10, "depth"].sum()
 
-    # 4) Spread in %-Punkten
-    pos_min = full.loc[full["percentage"] > 0, "percentage"].min()
-    neg_max = full.loc[full["percentage"] < 0, "percentage"].max()
-    spread_pct = (pos_min or 0) + abs(neg_max or 0)
+    # 3) dynamische Quantil-Bins (Quartile)
+    qs = full["percentage"].quantile([0.25, 0.5, 0.75])
+    q1, q2, q3 = qs.iloc[0], qs.iloc[1], qs.iloc[2]
+    notional_q1 = full.loc[full["percentage"] <= q1, "notional"].sum()
+    notional_q2 = full.loc[(full["percentage"] > q1) & (full["percentage"] <= q2), "notional"].sum()
+    notional_q3 = full.loc[(full["percentage"] > q2) & (full["percentage"] <= q3), "notional"].sum()
+    notional_q4 = full.loc[full["percentage"] > q3, "notional"].sum()
+    depth_q1     = full.loc[full["percentage"] <= q1, "depth"].sum()
+    depth_q2     = full.loc[(full["percentage"] > q1) & (full["percentage"] <= q2), "depth"].sum()
+    depth_q3     = full.loc[(full["percentage"] > q2) & (full["percentage"] <= q3), "depth"].sum()
+    depth_q4     = full.loc[full["percentage"] > q3, "depth"].sum()
 
-    # 5) Imbalances
+    # 4) Spread in %-Punkten
+    pos_min = full.loc[full["percentage"] > 0, "percentage"].min() or 0
+    neg_max = full.loc[full["percentage"] < 0, "percentage"].max() or 0
+    spread_pct = pos_min + abs(neg_max)
+
+    # 5) Imbalances (relativ und absolut)
     bid_notional = full.loc[full["percentage"] < 0, "notional"].sum()
     ask_notional = full.loc[full["percentage"] > 0, "notional"].sum()
+    bid_depth    = full.loc[full["percentage"] < 0, "depth"].sum()
+    ask_depth    = full.loc[full["percentage"] > 0, "depth"].sum()
     notional_imbalance = (bid_notional - ask_notional) / total_notional if total_notional else 0
+    depth_imbalance    = (bid_depth    - ask_depth)    / total_depth    if total_depth    else 0
+    rel_notional_1pct  = notional_1pct  / total_notional if total_notional else 0
+    rel_depth_1pct     = depth_1pct     / total_depth    if total_depth    else 0
 
-    bid_depth = full.loc[full["percentage"] < 0, "depth"].sum()
-    ask_depth = full.loc[full["percentage"] > 0, "depth"].sum()
-    depth_imbalance = (bid_depth - ask_depth) / total_depth if total_depth else 0
+    # 6) Verteilungs-Momente
+    n = full["notional"]
+    d = full["depth"]
+    not_mean   = n.mean()
+    not_var    = n.var(ddof=0)
+    not_skew   = skew(n, bias=False)
+    not_kurt   = kurtosis(n, bias=False)
+    depth_mean = d.mean()
+    depth_var  = d.var(ddof=0)
+    depth_skew = skew(d, bias=False)
+    depth_kurt = kurtosis(d, bias=False)
 
-    # Ergebnis-DataFrame bauen (einziger Timestamp = Window-Start)
+    # 7) Intraday-Segmente
+    seg1 = full.between_time("00:00", "07:59")[["notional","depth"]].sum()
+    seg2 = full.between_time("08:00", "15:59")[["notional","depth"]].sum()
+    seg3 = full.between_time("16:00", "23:59")[["notional","depth"]].sum()
+
+    # Ergebnis
     df_out = pd.DataFrame([{
-        "total_notional":     total_notional,
-        "total_depth":        total_depth,
-        "notional_1pct":      notional_1pct,
-        "depth_1pct":         depth_1pct,
-        "notional_10pct":     notional_10pct,
-        "depth_10pct":        depth_10pct,
-        "spread_pct":         spread_pct,
-        "notional_imbalance": notional_imbalance,
-        "depth_imbalance":    depth_imbalance,
+        "total_notional":      total_notional,
+        "total_depth":         total_depth,
+        "notional_1pct":       notional_1pct,
+        "depth_1pct":          depth_1pct,
+        "rel_notional_1pct":   rel_notional_1pct,
+        "rel_depth_1pct":      rel_depth_1pct,
+        "notional_10pct":      notional_10pct,
+        "depth_10pct":         depth_10pct,
+        "notional_q1":         notional_q1,
+        "notional_q2":         notional_q2,
+        "notional_q3":         notional_q3,
+        "notional_q4":         notional_q4,
+        "depth_q1":            depth_q1,
+        "depth_q2":            depth_q2,
+        "depth_q3":            depth_q3,
+        "depth_q4":            depth_q4,
+        "spread_pct":          spread_pct,
+        "notional_imbalance":  notional_imbalance,
+        "depth_imbalance":     depth_imbalance,
+        # Momente
+        "not_mean":            not_mean,
+        "not_var":             not_var,
+        "not_skew":            not_skew,
+        "not_kurt":            not_kurt,
+        "depth_mean":          depth_mean,
+        "depth_var":           depth_var,
+        "depth_skew":          depth_skew,
+        "depth_kurt":          depth_kurt,
+        # Segmente
+        "notional_00_08":      seg1["notional"],
+        "depth_00_08":         seg1["depth"],
+        "notional_08_16":      seg2["notional"],
+        "depth_08_16":         seg2["depth"],
+        "notional_16_24":      seg3["notional"],
+        "depth_16_24":         seg3["depth"],
     }])
-    # Index als Millisekunden-Epoche des Window-Start
-    df_out.index = [int(sd.value // 10**6)]
-    df_out.index.name = "timestamp"
 
+    # Index auf Datum setzen
+    df_out.index = [sd.normalize()]
+    df_out.index.name = "date"
     return df_out
 
 def main():
