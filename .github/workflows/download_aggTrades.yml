@@ -63,7 +63,7 @@ jobs:
             BNBUSDT)         INC="2020-02-10" ;;
             SOLUSDT)         INC="2020-09-14" ;;
             ENAUSDT)         INC="2024-04-02" ;;
-            *)               INC=$SDG        ;;
+            *)               INC=$SDG      ;;
           esac
 
           # 2) effektiver Start = max(global_start, INC)
