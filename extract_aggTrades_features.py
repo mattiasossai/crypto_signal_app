@@ -18,6 +18,9 @@ EXPECTED_COLS = [
 ]
 
 def process_one_file(fn: str) -> dict | None:
+    """
+    Liest eine Tages-CSV, aggregiert sofort und liefert eine dict mit Tagesfeatures.
+    """
     # Header-Erkennung
     with open(fn, "r") as f:
         tokens = f.readline().strip().split(",")
@@ -31,7 +34,7 @@ def process_one_file(fn: str) -> dict | None:
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
 
-    # Tages-Zeitfenster slicen
+    # Zeitindex und Tagesfenster
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
     day_str = os.path.basename(fn).split("-aggTrades-")[1].replace(".csv", "")
@@ -66,7 +69,7 @@ def main(input_dir, output_file, start_date, end_date):
     logging.info("→ Scanning CSVs in '%s'", input_dir)
     all_csv = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
 
-    # Überlappungstag einbeziehen
+    # 1-Tag-Overlap einbeziehen
     sd = pd.to_datetime(start_date) - pd.Timedelta(days=1)
     ed = pd.to_datetime(end_date)
     files = [
@@ -88,29 +91,11 @@ def main(input_dir, output_file, start_date, end_date):
         logging.error("❌ No data after processing; exiting.")
         return
 
-    # Basis-DataFrame
+    # Tages-DataFrame aufbauen
     df_feats = pd.DataFrame(rows).set_index("date").sort_index()
 
-    # Anfangs-Overlap löschen
+    # Overlap-Tag entfernen
     df_feats = df_feats.loc[df_feats.index >= start_date]
-
-    # --- Rolling-Volume-Features beibehalten, Imbalance-Rollings entfernt ---
-    # 7-Tage Volumen MA & STD
-    df_feats["vol_7d_ma"]  = df_feats["total_volume"].rolling(7,  min_periods=7).mean()
-    df_feats["vol_7d_std"] = df_feats["total_volume"].rolling(7,  min_periods=7).std()
-
-    # z-Score des 7-Tage-Volumens
-    df_feats["vol_7d_z"] = (
-        df_feats["total_volume"]
-        .sub(df_feats["vol_7d_ma"])
-        .div(df_feats["vol_7d_std"])
-    )
-
-    # 7-Tage Momentum (Prozent-Änderung)
-    df_feats["vol_7d_mom"] = df_feats["total_volume"].pct_change(periods=7)
-
-    # Nur noch Drop-NA auf Basis Vol-Std
-    df_feats = df_feats.dropna(subset=["vol_7d_std"])
 
     # Parquet schreiben
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
