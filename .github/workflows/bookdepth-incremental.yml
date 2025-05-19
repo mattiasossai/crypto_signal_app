@@ -10,9 +10,9 @@ on:
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
-  # 2) Geplanter Run um 04:00 UTC täglich
+  # 2) Geplanter Run um 06:00 UTC täglich
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 6 * * *'
 
 jobs:
   download-and-feature:
