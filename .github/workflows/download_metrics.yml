@@ -3,8 +3,8 @@ name: 📥 Download & Commit metrics
 on:
   workflow_dispatch:
   schedule:
-    # täglich 03:00 UTC
-    - cron: '0 3 * * *'
+    # täglich 06:00 UTC
+    - cron: '0 6 * * *'
 
 jobs:
   download:
