@@ -95,9 +95,15 @@ def main(input_dir, output_file, start_date, end_date):
     # Überlappungs-Starttag entfernen
     df_feats = df_feats.loc[df_feats.index >= start_date]
 
-    # --- Robuste Lückenbehandlung: jeden Tag abbilden und Null-Filling ---
+    # **Variante 1: Robuste Lückenbehandlung**
+    # → jeden Kalendertag abbilden + fehlende Tage mit 0 füllen
     df_feats.index = pd.to_datetime(df_feats.index).tz_localize("UTC")
-    full_idx = pd.date_range(start=start_date, end=end_date, freq='D', tz='UTC')
+    full_idx = pd.date_range(
+        start=pd.to_datetime(start_date).tz_localize("UTC"),
+        end=pd.to_datetime(end_date).tz_localize("UTC"),
+        freq='D',
+        tz='UTC'
+    )
     df_feats = df_feats.reindex(full_idx, fill_value=0)
     df_feats.index.name = "date"
 
