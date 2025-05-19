@@ -3,8 +3,8 @@ name: 📥 Download & Commit indexPriceKlines (1h & 4h)
 on:
   workflow_dispatch:
   schedule:
-    # täglich 02:00 UTC
-    - cron: '0 2 * * *'
+    # täglich 04:00 UTC
+    - cron: '0 4 * * *'
 
 jobs:
   download:
