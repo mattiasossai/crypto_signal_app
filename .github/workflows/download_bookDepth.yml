@@ -41,23 +41,24 @@ jobs:
         id: dates
         run: |
           echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
-          echo "global_end=${{ inputs.end_date }}"   >> $GITHUB_OUTPUT
+          echo "global_end=${{ inputs.end_date   }}" >> $GITHUB_OUTPUT
 
       - name: Download & unzip bookDepth with Inception
         shell: bash
         run: |
-          echo "→ Using inception logic for $SYMBOL"
           SYMBOL=${{ matrix.symbol }}
           SDG=${{ steps.dates.outputs.global_start }}
           ED=${{ steps.dates.outputs.global_end }}
 
+          # 1) Symbol-Inception
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
             ENAUSDT)                           INC="2024-04-02";;
-            *)                                 INC=$SDG;;
+            *)                                 INC="$SDG";;
           esac
 
+          # 2) Effektiver Start = max(global, inception)
           if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
             SD="$INC"
           else
@@ -67,7 +68,6 @@ jobs:
 
           DIR=data/bookDepth/$SYMBOL
           mkdir -p "$DIR"
-
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
@@ -75,11 +75,9 @@ jobs:
             if curl -sSf \
                  "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" \
                  -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$DIR"
-              rm -f "$ZIP"
+              unzip -q -o "$ZIP" -d "$DIR" && rm -f "$ZIP"
             else
-              echo "⚠️ Missing $ZIP – skipping"
-              rm -f "$ZIP"
+              echo "⚠️ Missing $ZIP – skipping"; rm -f "$ZIP"
             fi
             CUR=$(date -I -d "$CUR +1 day")
           done
@@ -113,5 +111,4 @@ jobs:
 
       - name: Cleanup raw data
         if: always()
-        run: |
-          rm -rf data/bookDepth/${{ matrix.symbol }}
+        run: rm -rf data/bookDepth/${{ matrix.symbol }}
