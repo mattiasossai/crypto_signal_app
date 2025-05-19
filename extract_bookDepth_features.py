@@ -3,6 +3,7 @@ import os
 import glob
 import argparse
 import logging
+import re
 import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
@@ -13,7 +14,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# Symbol-spezifische Inception-Daten
+# Inception-Daten je Symbol
 INCEPTION = {
     "BTCUSDT": "2023-01-01",
     "ETHUSDT": "2023-01-01",
@@ -28,77 +29,60 @@ def fp_contains_header(fp: str) -> bool:
         first = f.readline().split(",")[0]
     return not first.isdigit()
 
-def extract_features(input_dir: str, start_date: str, end_date: str) -> pd.DataFrame:
-    symbol     = os.path.basename(input_dir)
-    user_sd    = pd.to_datetime(start_date).tz_localize("UTC")
-    inception  = pd.to_datetime(INCEPTION.get(symbol, start_date)).tz_localize("UTC")
-    real_start = max(user_sd, inception)
-    user_ed    = pd.to_datetime(end_date).tz_localize("UTC")
-
-    # Tages-Index von real_start bis user_ed
-    days = pd.date_range(
-        real_start.normalize(),
-        user_ed.normalize(),
-        freq="D", tz="UTC"
-    )
-
+def extract_for_days(input_dir: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """Erzeuge Tages-Features für alle Tage von start..end (inkl.)."""
+    symbol = os.path.basename(input_dir)
+    days = pd.date_range(start.normalize(), end.normalize(), freq="D", tz="UTC")
     rows = []
     for day in days:
-        day_str     = day.strftime("%Y-%m-%d")
-        fp          = os.path.join(input_dir, f"{symbol}-bookDepth-{day_str}.csv")
-        file_exists = os.path.exists(fp)
-
-        # CSV einlesen oder leeren DataFrame anlegen
-        if file_exists:
+        day_str = day.strftime("%Y-%m-%d")
+        fp = os.path.join(input_dir, f"{symbol}-bookDepth-{day_str}.csv")
+        # CSV einlesen (oder Empty-DF)
+        if os.path.exists(fp):
             df = pd.read_csv(
                 fp,
                 header=0 if fp_contains_header(fp) else None,
                 names=["timestamp","percentage","depth","notional"],
             )
+            # robustes Parsen
             if np.issubdtype(df["timestamp"].dtype, np.number):
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
             else:
                 df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
             df.set_index("timestamp", inplace=True)
-
-            sd       = day
-            ed       = day + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-            full     = df[sd:ed]
+            full = df[day : day + pd.Timedelta(days=1) - pd.Timedelta(ms=1)]
             has_data = not full.empty
         else:
-            full     = pd.DataFrame(
-                columns=["percentage","depth","notional"],
-                index=pd.DatetimeIndex([], tz="UTC")
-            )
+            full = pd.DataFrame(columns=["percentage","depth","notional"],
+                                index=pd.DatetimeIndex([], tz="UTC"))
             has_data = False
 
-        # Summen & Bins
+        # Basis-Aggregationen
         total_notional = full["notional"].sum()
         total_depth    = full["depth"].sum()
-        mask1          = full["percentage"].abs() <= 1.0
-        mask10         = full["percentage"].abs() <= 10.0
-        not_1          = full.loc[mask1,  "notional"].sum()
-        dep_1          = full.loc[mask1,     "depth"].sum()
-        not_10         = full.loc[mask10, "notional"].sum()
-        dep_10         = full.loc[mask10,    "depth"].sum()
+        mask1   = full["percentage"].abs() <= 1.0
+        mask10  = full["percentage"].abs() <= 10.0
+        n1 = full.loc[mask1, "notional"].sum()
+        d1 = full.loc[mask1, "depth"].sum()
+        n10= full.loc[mask10,"notional"].sum()
+        d10= full.loc[mask10,"depth"].sum()
 
-        # Relativkennzahlen
-        rel_not1 = not_1  / total_notional if total_notional else np.nan
-        rel_dep1 = dep_1  / total_depth    if total_depth    else np.nan
+        # relative
+        rel_n1 = n1 / total_notional if total_notional else np.nan
+        rel_d1 = d1 / total_depth    if total_depth    else np.nan
 
-        # Spread
-        pos_min    = full.loc[full["percentage"]>0, "percentage"].min() or 0
-        neg_max    = full.loc[full["percentage"]<0, "percentage"].max() or 0
-        spread_pct = pos_min + abs(neg_max)
+        # spread
+        p_min = full.loc[full["percentage"]>0,"percentage"].min() or 0
+        n_max = full.loc[full["percentage"]<0,"percentage"].max() or 0
+        spread_pct = p_min + abs(n_max)
 
-        # Imbalance
-        bid_not = full.loc[full["percentage"]<0, "notional"].sum()
-        ask_not = full.loc[full["percentage"]>0, "notional"].sum()
-        not_imb = (bid_not-ask_not)/total_notional if total_notional else np.nan
-
-        bid_dep = full.loc[full["percentage"]<0, "depth"].sum()
-        ask_dep = full.loc[full["percentage"]>0, "depth"].sum()
-        dep_imb = (bid_dep-ask_dep)/total_depth    if total_depth    else np.nan
+        # imbalance
+        bid_n = full.loc[full["percentage"]<0,"notional"].sum()
+        ask_n = full.loc[full["percentage"]>0,"notional"].sum()
+        imb_n = (bid_n - ask_n) / total_notional if total_notional else np.nan
+        bid_d = full.loc[full["percentage"]<0,"depth"].sum()
+        ask_d = full.loc[full["percentage"]>0,"depth"].sum()
+        imb_d = (bid_d - ask_d) / total_depth    if total_depth    else np.nan
 
         # Verteilungs-Momente
         n = full["notional"]; d = full["depth"]
@@ -114,63 +98,42 @@ def extract_features(input_dir: str, start_date: str, end_date: str) -> pd.DataF
         }
 
         # Intraday-Segmente
-        seg1 = full.between_time("00:00","07:59")[["notional","depth"]]
-        seg2 = full.between_time("08:00","15:59")[["notional","depth"]]
-        seg3 = full.between_time("16:00","23:59")[["notional","depth"]]
-        seg1s = seg1.sum(min_count=1)
-        seg2s = seg2.sum(min_count=1)
-        seg3s = seg3.sum(min_count=1)
-
-        # Segment-Flags
-        has_00_08 = not seg1.empty
-        has_08_16 = not seg2.empty
-        has_16_24 = not seg3.empty
-
-        # Gesamt-Flags
-        has_notional = total_notional > 0
-        has_depth    = total_depth    > 0
-
-        # Wenn gar keine Daten im Tag, alles numerische auf NaN
-        if not has_data:
-            total_notional = total_depth = np.nan
-            not_1 = dep_1 = not_10 = dep_10 = np.nan
-            rel_not1 = rel_dep1 = np.nan
-            spread_pct = not_imb = dep_imb = np.nan
-            for k in moments: moments[k] = np.nan
-            seg1s[:] = np.nan; seg2s[:] = np.nan; seg3s[:] = np.nan
+        seg1 = full.between_time("00:00","07:59")[["notional","depth"]].sum(min_count=1)
+        seg2 = full.between_time("08:00","15:59")[["notional","depth"]].sum(min_count=1)
+        seg3 = full.between_time("16:00","23:59")[["notional","depth"]].sum(min_count=1)
 
         rows.append({
             "date":                day,
-            "file_exists":         file_exists,
+            "file_exists":         os.path.exists(fp),
             "has_data":            has_data,
-            "has_notional":        has_notional,
-            "has_depth":           has_depth,
+            "has_notional":        total_notional>0,
+            "has_depth":           total_depth>0,
             "total_notional":      total_notional,
             "total_depth":         total_depth,
-            "notional_1pct":       not_1,
-            "depth_1pct":          dep_1,
-            "rel_notional_1pct":   rel_not1,
-            "rel_depth_1pct":      rel_dep1,
-            "notional_10pct":      not_10,
-            "depth_10pct":         dep_10,
+            "notional_1pct":       n1,
+            "depth_1pct":          d1,
+            "rel_notional_1pct":   rel_n1,
+            "rel_depth_1pct":      rel_d1,
+            "notional_10pct":      n10,
+            "depth_10pct":         d10,
             "spread_pct":          spread_pct,
-            "notional_imbalance":  not_imb,
-            "depth_imbalance":     dep_imb,
+            "notional_imbalance":  imb_n,
+            "depth_imbalance":     imb_d,
             **moments,
-            "notional_00_08":      seg1s["notional"],
-            "depth_00_08":         seg1s["depth"],
-            "notional_08_16":      seg2s["notional"],
-            "depth_08_16":         seg2s["depth"],
-            "notional_16_24":      seg3s["notional"],
-            "depth_16_24":         seg3s["depth"],
-            "has_00_08":           has_00_08,
-            "has_08_16":           has_08_16,
-            "has_16_24":           has_16_24,
+            "notional_00_08":      seg1["notional"],
+            "depth_00_08":         seg1["depth"],
+            "notional_08_16":      seg2["notional"],
+            "depth_08_16":         seg2["depth"],
+            "notional_16_24":      seg3["notional"],
+            "depth_16_24":         seg3["depth"],
+            "has_00_08":           not pd.isna(seg1["notional"]),
+            "has_08_16":           not pd.isna(seg2["notional"]),
+            "has_16_24":           not pd.isna(seg3["notional"]),
         })
 
-    df_out = pd.DataFrame(rows).set_index("date")
-    df_out.index.name = "date"
-    return df_out
+    df = pd.DataFrame(rows).set_index("date")
+    df.index.name = "date"
+    return df
 
 def main():
     p = argparse.ArgumentParser()
@@ -180,14 +143,48 @@ def main():
     p.add_argument("--end-date",    required=True)
     args = p.parse_args()
 
-    out = extract_features(
-        args.input_dir,
-        args.start_date,
-        args.end_date
-    )
-    os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
-    out.to_parquet(args.output_file, compression="snappy")
-    print(f"✅ Wrote features to {args.output_file}")
+    out_dir   = os.path.dirname(args.output_file)
+    symbol    = os.path.basename(args.input_dir)
+    user_sd   = pd.to_datetime(args.start_date).tz_localize("UTC")
+    user_ed   = pd.to_datetime(args.end_date).tz_localize("UTC")
+
+    # 1) prüfen, ob es schon alte Files gibt
+    pattern = os.path.join(out_dir, f"{symbol}-features-*.parquet")
+    old_files = glob.glob(pattern)
+    if old_files:
+        # jeweils das mit dem größten max(date)-Wert einlesen
+        best = None; best_date = pd.Timestamp.min
+        for f in old_files:
+            tmp = pd.read_parquet(f)
+            m = tmp.index.max()
+            if m > best_date:
+                best_date, best = m, f
+        df_old = pd.read_parquet(best)
+        new_start = (best_date + pd.Timedelta(days=1)).normalize()
+        logging.info("→ Append mode, resume at %s", new_start.date())
+    else:
+        df_old    = None
+        # Inception je Symbol
+        inc = pd.to_datetime(INCEPTION.get(symbol, args.start_date)).tz_localize("UTC")
+        new_start = max(user_sd, inc).normalize()
+        logging.info("→ Fresh mode, start at %s", new_start.date())
+
+    if new_start > user_ed:
+        logging.info("ℹ️ Nothing new to append (new_start > end_date).")
+        return
+
+    df_new = extract_for_days(args.input_dir, new_start, user_ed)
+
+    # 2) zusammenführen
+    if df_old is not None:
+        df = pd.concat([df_old, df_new]).sort_index()
+    else:
+        df = df_new
+
+    # 3) parquete schreiben
+    os.makedirs(out_dir, exist_ok=True)
+    df.to_parquet(args.output_file, compression="snappy")
+    logging.info("✅ Wrote combined features to %s (%d days)", args.output_file, len(df))
 
 if __name__ == "__main__":
     main()
