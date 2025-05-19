@@ -1,7 +1,7 @@
 name: "📥 Incremental Download & Feature bookDepth per Symbol"
 
 on:
-  # 1) Manuelles Auslösen (bleibt bestehen, falls du noch per Button triggern willst)
+  # 1) Manuelles Auslösen
   workflow_dispatch:
     inputs:
       start_date:
@@ -11,16 +11,23 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
 
-  # 2) Geplanter Run um 03:00 UTC jeden Tag
+  # 2) Geplanter Run um 03:00 UTC täglich
   schedule:
-    - cron: '0 3 * * *'    # 0 Minuten, 3 Uhr UTC täglich
+    - cron: '0 3 * * *'
+
 jobs:
   download-and-feature:
     name: "BookDepth ${{ matrix.symbol }} (incremental)"
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+        symbol:
+          - BTCUSDT
+          - ETHUSDT
+          - BNBUSDT
+          - SOLUSDT
+          - XRPUSDT
+          - ENAUSDT
       max-parallel: 1
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
