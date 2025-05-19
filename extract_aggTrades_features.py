@@ -18,9 +18,6 @@ EXPECTED_COLS = [
 ]
 
 def process_one_file(fn: str) -> dict | None:
-    """
-    Liest eine Tages-CSV, aggregiert sofort und liefert eine dict mit Tagesfeatures.
-    """
     # Header-Erkennung
     with open(fn, "r") as f:
         tokens = f.readline().strip().split(",")
@@ -34,9 +31,10 @@ def process_one_file(fn: str) -> dict | None:
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
 
-    # Zeitindex und Tagesfenster
+    # Timestamp und Tagesfenster
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
+
     day_str = os.path.basename(fn).split("-aggTrades-")[1].replace(".csv", "")
     sd = pd.to_datetime(day_str).tz_localize("UTC")
     ed = sd + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
@@ -91,11 +89,17 @@ def main(input_dir, output_file, start_date, end_date):
         logging.error("❌ No data after processing; exiting.")
         return
 
-    # Tages-DataFrame aufbauen
+    # Basis-DataFrame
     df_feats = pd.DataFrame(rows).set_index("date").sort_index()
 
-    # Overlap-Tag entfernen
+    # Überlappungs-Starttag entfernen
     df_feats = df_feats.loc[df_feats.index >= start_date]
+
+    # --- Robuste Lückenbehandlung: jeden Tag abbilden und Null-Filling ---
+    df_feats.index = pd.to_datetime(df_feats.index).tz_localize("UTC")
+    full_idx = pd.date_range(start=start_date, end=end_date, freq='D', tz='UTC')
+    df_feats = df_feats.reindex(full_idx, fill_value=0)
+    df_feats.index.name = "date"
 
     # Parquet schreiben
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
