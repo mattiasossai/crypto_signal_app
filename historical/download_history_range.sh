@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# args: SYMBOL INTERVAL START_DATE END_DATE
 if [ $# -ne 4 ]; then
   echo "Usage: $0 SYMBOL INTERVAL START_DATE END_DATE"
   exit 1
 fi
 
-SYMBOL="$1"       # z.B. BTCUSDT
-INTERVAL="$2"     # 1m | 5m | 15m | 1h | 4h
-START="$3"        # YYYY-MM-DD
-END="$4"          # YYYY-MM-DD
+SYMBOL=$1       # z.B. BTCUSDT
+INTERVAL=$2     # 1m | 5m | 15m | 1h | 4h
+START=$3        # YYYY-MM-DD
+END=$4          # YYYY-MM-DD
 
-TARGET="historical/${SYMBOL}/${INTERVAL}"
+TARGET="historical/historical-${SYMBOL}-${INTERVAL}"
 mkdir -p "$TARGET"
 
-# Hilfsfunktion: Datum → Sekunden
-to_sec() { date -d "$1" +%s; }
+# Hilfsfunktion: Datum zu Unix-Sekunden
+to_sec(){ date -d "$1" +%s; }
 
 cur="$START"
 end_sec=$(to_sec "$END")
