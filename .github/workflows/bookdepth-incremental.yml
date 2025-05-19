@@ -1,0 +1,140 @@
+name: "📥 Incremental Download & Feature bookDepth per Symbol"
+
+on:
+  # 1) Manuelles Auslösen (bleibt bestehen, falls du noch per Button triggern willst)
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Startdatum (YYYY-MM-DD)'
+        required: true
+      end_date:
+        description: 'Enddatum (YYYY-MM-DD)'
+        required: true
+
+  # 2) Geplanter Run um 03:00 UTC jeden Tag
+  schedule:
+    - cron: '0 3 * * *'    # 0 Minuten, 3 Uhr UTC täglich
+jobs:
+  download-and-feature:
+    name: "BookDepth ${{ matrix.symbol }} (incremental)"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 1
+    env:
+      REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO:       ${{ github.repository }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pandas pyarrow scipy
+
+      - name: Calc dates
+        id: dates
+        run: |
+          # global_start fix: 2025-01-01
+          echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
+          # end = today
+          echo "today=$(date -I)"              >> $GITHUB_OUTPUT
+
+      - name: Determine resume point
+        id: resume
+        run: |
+          SYMBOL=${{ matrix.symbol }}
+          DIR=historical_tech/bookDepth/features
+          # finde altes File
+          old=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$old" ]]; then
+            # extrahiere altes Enddatum aus dem Filenamen
+            old_end=$(basename "$old" .parquet \
+              | sed -E 's/^.*_to_([0-9]{4}-[0-9]{2}-[0-9]{2})$/\1/')
+            start=$(date -I -d "$old_end + 1 day")
+            echo "mode=append"                  >> $GITHUB_OUTPUT
+            echo "start=$start"                 >> $GITHUB_OUTPUT
+          else
+            echo "mode=fresh"                   >> $GITHUB_OUTPUT
+            echo "start=${{ steps.dates.outputs.global_start }}" >> $GITHUB_OUTPUT
+          fi
+          echo "end=${{ steps.dates.outputs.today }}"           >> $GITHUB_OUTPUT
+
+      - name: Download & unzip bookDepth with Inception
+        shell: bash
+        run: |
+          echo "→ Incorporate Inception logic for $SYMBOL"
+          SYMBOL=${{ matrix.symbol }}
+          SDG=${{ steps.resume.outputs.start }}
+          ED=${{ steps.resume.outputs.end }}
+
+          case "$SYMBOL" in
+            BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
+            XRPUSDT)                           INC="2023-01-06";;
+            ENAUSDT)                           INC="2024-04-02";;
+            *)                                 INC=$SDG;;
+          esac
+
+          # sicherstellen, dass wir Mindestens Inception berücksichtigen
+          if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
+            SD="$INC"
+          else
+            SD="$SDG"
+          fi
+          echo "→ Download days from $SD to $ED"
+
+          DIR=data/bookDepth/$SYMBOL
+          mkdir -p "$DIR"
+
+          CUR="$SD"
+          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
+            ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
+            echo "→ Fetching $ZIP"
+            if curl -sSf \
+                 "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" \
+                 -o "$ZIP"; then
+              unzip -q -o "$ZIP" -d "$DIR" && rm -f "$ZIP"
+            else
+              echo "⚠️ Missing $ZIP – skipping"
+              rm -f "$ZIP"
+            fi
+            CUR=$(date -I -d "$CUR +1 day")
+          done
+
+      - name: Feature extraction & append
+        run: |
+          mkdir -p historical_tech/bookDepth/features
+          OUT=historical_tech/bookDepth/features/${{ matrix.symbol }}-features-\
+${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet
+
+          python3 extract_bookDepth_features.py \
+            --input-dir data/bookDepth/${{ matrix.symbol }} \
+            --start-date ${{ steps.dates.outputs.global_start }} \
+            --end-date   ${{ steps.resume.outputs.end }} \
+            --output-file $OUT
+
+      - name: Commit & Push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main
+          git add historical_tech/bookDepth/features
+          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features \
+${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}" \
+            || echo "No changes"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+
+      - name: Cleanup raw data
+        if: always()
+        run: rm -rf data/bookDepth/${{ matrix.symbol }}
