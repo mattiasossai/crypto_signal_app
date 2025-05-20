@@ -41,9 +41,7 @@ jobs:
             if curl -sSf "$URL" -o tmp.zip; then
               unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
               rm tmp.zip
-              echo " ✅ extracted ${ZIP}"
             else
-              echo " ⚠️ missing ${ZIP}"
               rm -f tmp.zip || true
             fi
           done
@@ -80,12 +78,17 @@ jobs:
           set -euo pipefail
           ROOT="historical_tech/indexPriceKlines/data-artifacts"
           mkdir -p "$ROOT"
-          for art in data-artifacts/*; do
-            name=$(basename "$art")                       # data-indexPriceKlines-<SYMBOL>
-            dst="$ROOT/$name"
-            mkdir -p "$dst"
-            mv "$art"/* "$dst"/
-            echo " ➕ Moved $name → $dst"
+
+          # verschiebe jede CSV einzeln, so gibt's keine "Directory not empty"-Konflikte
+          find data-artifacts -type f -name '*.csv' | while read src; do
+            # src = data-artifacts/data-indexPriceKlines-<SYMBOL>/<iv>/<file>.csv
+            symbol_dir=$(basename "$(dirname "$(dirname "$src")")")   # data-indexPriceKlines-<SYMBOL>
+            interval=$(basename "$(dirname "$src")")                 # 1h oder 4h
+            file=$(basename "$src")
+            dst="$ROOT/${symbol_dir}/${interval}/${file}"
+            mkdir -p "$(dirname "$dst")"
+            mv "$src" "$dst"
+            echo " ➕ $dst"
           done
 
       - name: Commit & Push indexPriceKlines
@@ -102,4 +105,3 @@ jobs:
             git commit -m "chore(data): import indexPriceKlines ${END} [skip ci]"
             git push origin HEAD:main
           fi
-
