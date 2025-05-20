@@ -1,0 +1,74 @@
+# .github/workflows/aggtrades-incremental.yml
+name: "📥 Incremental Download & Feature aggTrades per Symbol"
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date: { description: 'Startdatum (YYYY-MM-DD)', required: true }
+      end_date:   { description: 'Enddatum (YYYY-MM-DD)', required: true }
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  download-and-feature:
+    runs-on: self-hosted    # oder ubuntu-latest
+    strategy:
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.12' }
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
+          pip install --upgrade pandas numpy pyarrow
+
+      - name: Calc dates
+        id: dates
+        run: |
+          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
+          echo "today=$(date -I)"        >> $GITHUB_OUTPUT
+
+      - name: Download & unzip
+        shell: bash
+        run: |
+          SYMBOL=${{ matrix.symbol }}
+          SDG=${{ steps.dates.outputs.global_start }}
+          ED=${{ steps.dates.outputs.today }}
+          INC=$(case "$SYMBOL" in
+            BTCUSDT|ETHUSDT) echo "2019-12-31" ;;
+            XRPUSDT)         echo "2020-01-06" ;;
+            BNBUSDT)         echo "2020-02-10" ;;
+            SOLUSDT)         echo "2020-09-14" ;;
+            ENAUSDT)         echo "2024-04-02" ;;
+            *)               echo "$SDG" ;;
+          esac)
+          # effective start = max(SDG,INC)
+          if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then SD="$INC"; else SD="$SDG"; fi
+          DIR=data/aggTrades/$SYMBOL; mkdir -p "$DIR"
+          CUR="$SD"
+          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
+            ZIP="$SYMBOL-aggTrades-$CUR.zip"
+            curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP" \
+              && unzip -p "$ZIP" > data/aggTrades/$SYMBOL/${ZIP%.zip}.csv \
+              && rm -f "$ZIP" \
+              || ( echo "⚠️ Missing $ZIP"; rm -f "$ZIP" )
+            CUR=$(date -I -d "$CUR +1 day")
+          done
+
+      - name: Feature extraction & merge
+        run: |
+          OUT=historical_tech/aggTrades/features/${{ matrix.symbol }}-features-\
+${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.today }}.parquet
+          python3 extract_aggTrades_features.py \
+            --input-dir data/aggTrades/${{ matrix.symbol }} \
+            --start-date ${{ steps.dates.outputs.global_start }} \
+            --end-date   ${{ steps.dates.outputs.today }} \
+            --output-file $OUT
+
+      - run: |
+          git add historical_tech/aggTrades/features
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features updated to ${{ steps.dates.outputs.today }}" \
+             || echo "No changes"
+          git push
