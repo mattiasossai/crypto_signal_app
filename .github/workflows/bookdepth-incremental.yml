@@ -10,7 +10,7 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 0 * * *'
 
 jobs:
   download-and-feature:
