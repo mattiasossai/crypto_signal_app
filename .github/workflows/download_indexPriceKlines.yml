@@ -1,10 +1,10 @@
-name: 📥 Download & Commit indexPriceKlines (1h & 4h)
+name: 2️⃣📥 Download & Commit indexPriceKlines (1h & 4h)
 
 on:
   workflow_dispatch:
   schedule:
     # täglich 08:00 UTC
-    - cron: '0 8 * * *'
+    - cron: '10 8 * * *'
 
 jobs:
   download:
