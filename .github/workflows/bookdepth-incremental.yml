@@ -53,8 +53,8 @@ jobs:
         run: |
           # fixed global start for 2025-files
           echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
-          # today = letzter verfügbarer Tag
-          echo "today=$(date -I)" >> $GITHUB_OUTPUT
+          # end = gestern, da heutiges ZIP noch nicht existiert
+          echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
         id: resume
