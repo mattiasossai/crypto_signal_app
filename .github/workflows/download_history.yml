@@ -3,8 +3,8 @@ name: 🔄 Download & Commit Historical Klines
 on:
   workflow_dispatch:
   schedule:
-    # täglich 07:00 UTC
-    - cron: '0 7 * * *'
+    # täglich 08:00 UTC
+    - cron: '0 8 * * *'
 
 jobs:
   download_matrix:
