@@ -1,7 +1,6 @@
 name: "📥 Incremental Download & Feature aggTrades per Symbol"
 
 on:
-  # 1) Manuelles Auslösen
   workflow_dispatch:
     inputs:
       start_date:
@@ -10,142 +9,73 @@ on:
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
-
-  # 2) Geplanter Run um 08:00 UTC täglich
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 8 * * *'  # täglich 03:00 UTC
 
 jobs:
   download-and-feature:
     name: "aggTrades ${{ matrix.symbol }} (incremental)"
-    runs-on: self-hosted   # oder ubuntu-latest
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol:
-          - BTCUSDT
-          - ETHUSDT
-          - BNBUSDT
-          - SOLUSDT
-          - XRPUSDT
-          - ENAUSDT
-      max-parallel: 1
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
     env:
       REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO:       ${{ github.repository }}
 
     steps:
-      - name: 🧹 Clean old artifacts
-        run: |
-          find . -maxdepth 1 -type f -name '*.zip' -delete
-          rm -rf data/aggTrades/${{ matrix.symbol }}
-
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl unzip
-          pip3 install --upgrade pandas pyarrow
+      - name: Install deps
+        run: pip install --upgrade pandas pyarrow
 
-      - name: Calc dates
+      - name: Calc global dates
         id: dates
         run: |
-          # global_start fix: 2025-01-01
-          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
-          # end = today
-          echo "today=$(date -I)"          >> $GITHUB_OUTPUT
+          echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
+          echo "global_end=${{ inputs.end_date  }}" >> $GITHUB_OUTPUT
 
-      - name: Determine resume point
-        id: resume
+      - name: Download & unzip raw CSVs
         run: |
           SYMBOL=${{ matrix.symbol }}
-          DIR=historical_tech/aggTrades/features
-          old=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$old" ]]; then
-            old_end=$(basename "$old" .parquet | sed -E 's/^.*_to_([0-9]{4}-[0-9]{2}-[0-9]{2})$/\1/')
-            start=$(date -I -d "$old_end + 1 day")
-            echo "mode=append"              >> $GITHUB_OUTPUT
-            echo "start=$start"             >> $GITHUB_OUTPUT
-          else
-            echo "mode=fresh"               >> $GITHUB_OUTPUT
-            echo "start=${{ steps.dates.outputs.global_start }}" >> $GITHUB_OUTPUT
-          fi
-          echo "end=${{ steps.dates.outputs.today }}"          >> $GITHUB_OUTPUT
-
-      - name: Download & extract raw data with Overlap & Inception
-        shell: bash
-        run: |
-          SYMBOL=${{ matrix.symbol }}
-          SDG=${{ steps.resume.outputs.start }}
-          ED=${{ steps.resume.outputs.end }}
-
-          # Symbol-Inception bestimmen
-          case "$SYMBOL" in
-            BTCUSDT|ETHUSDT) INC="2019-12-31";;
-            BNBUSDT)         INC="2020-02-10";;
-            SOLUSDT)         INC="2020-09-14";;
-            XRPUSDT)         INC="2020-01-06";;
-            ENAUSDT)         INC="2024-04-02";;
-            *)               INC=$SDG      ;;
-          esac
-
-          # sicherstellen, dass wir mindestens bis Inception zurückgehen
-          if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
-            START="$INC"
-          else
-            START="$SDG"
-          fi
-
-          echo "→ Fetching aggTrades from $START to $ED"
-          DIR=data/aggTrades/$SYMBOL
-          mkdir -p "$DIR"
-
-          # Overlap-Tag = START-1
-          CUR=$(date -I -d "$START -1 day")
+          SDG=${{ steps.dates.outputs.global_start }}
+          ED=${{ steps.dates.outputs.global_end }}
+          INC=$(python3 - <<'PYCODE'
+import sys, json
+# no-op here; inception logic only in script
+print("")
+PYCODE)
+          mkdir -p data/aggTrades/$SYMBOL
+          # always download entire window: script droppt schon Alt-Daten raus
+          CUR=$SDG
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
-            echo "→ Fetching $ZIP"
-            if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -p "$ZIP" > "$DIR/${ZIP%.zip}.csv"
-              rm -f "$ZIP"
-            else
-              echo "⚠️ Missing $ZIP – skipping"
-              rm -f "$ZIP"
-            fi
+            curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP" && \
+              unzip -p "$ZIP" > data/aggTrades/$SYMBOL/${ZIP%.zip}.csv && rm -f "$ZIP" || echo "⚠️ Missing $ZIP"
             CUR=$(date -I -d "$CUR +1 day")
           done
 
       - name: Feature extraction & append
         run: |
           mkdir -p historical_tech/aggTrades/features
-          OUT="historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
-          python3 extract_aggTrades_features.py \
+          OUT=historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.global_end }}.parquet
+          python3 extract_aggTrades_features_incremental.py \
             --input-dir   data/aggTrades/${{ matrix.symbol }} \
-            --start-date  "${{ steps.dates.outputs.global_start }}" \
-            --end-date    "${{ steps.resume.outputs.end }}" \
-            --output-file "$OUT"
+            --output-file $OUT \
+            --start-date  ${{ steps.dates.outputs.global_start }} \
+            --end-date    ${{ steps.dates.outputs.global_end }}
 
       - name: Commit & Push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          git pull --rebase origin main
-          git add historical_tech/aggTrades/features
-          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}" || echo "No changes"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-
-      - name: Cleanup raw data
-        if: always()
-        run: |
-          rm -rf data/aggTrades/${{ matrix.symbol }}
+          git fetch origin main && git checkout main
+          git add historical_tech/aggTrades/features && git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features up to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
+          git push https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git HEAD:main
