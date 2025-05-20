@@ -1,4 +1,4 @@
-name: 🔄 Download & Commit Historical Klines
+name: 1️⃣📥 Download & Commit Historical Klines
 
 on:
   workflow_dispatch:
