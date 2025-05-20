@@ -1,4 +1,4 @@
-name: "📥 Incremental Download & Feature bookDepth per Symbol"
+name: "5️⃣📥 Incremental Download & Feature bookDepth per Symbol"
 
 on:
   # 1) Manuelles Auslösen
@@ -13,7 +13,7 @@ on:
 
   # 2) Geplanter Run um 08:00 UTC täglich
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '40 8 * * *'
 
 jobs:
   download-and-feature:
