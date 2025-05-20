@@ -1,4 +1,4 @@
-name: 3️⃣📥 Download & Commit metrics
+name: 3️⃣📊 Download & Commit metrics
 
 on:
   workflow_dispatch:
