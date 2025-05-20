@@ -41,7 +41,7 @@ def process_one_file(fn: str) -> dict | None:
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
 
-    # in UTC timestamp
+    # Timestamp in UTC
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
 
@@ -78,21 +78,16 @@ def main(input_dir, output_file, start_date, end_date):
     logging.info("→ Scanning CSVs in '%s'", input_dir)
     symbol = os.path.basename(input_dir)
 
-    # parse user-dates
+    # parse user-dates und Inception
     user_sd = pd.to_datetime(start_date).tz_localize("UTC")
     user_ed = pd.to_datetime(end_date).tz_localize("UTC")
-
-    # inception-date parsieren
-    inc = pd.to_datetime(INCEPTION.get(symbol, start_date)).tz_localize("UTC")
-
-    # real_start = max(user_start, inception)
+    inc     = pd.to_datetime(INCEPTION.get(symbol, start_date)).tz_localize("UTC")
     real_start = max(user_sd, inc)
 
-    # 1-Tag-Overlap für Features, aber erst ab real_start
+    # 1-Tag-Overlap für Feature-Berechnung
     sd = real_start - pd.Timedelta(days=1)
     ed = user_ed
 
-    # alle CSVs
     all_csv = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
     files = [
         fn for fn in all_csv
@@ -119,8 +114,7 @@ def main(input_dir, output_file, start_date, end_date):
     # Overlap-Tag (erste Zeile) verwerfen
     df_feats = df_feats.loc[df_feats.index >= real_start.strftime("%Y-%m-%d")]
 
-    # Robustes Lücken-Handling:
-    # Index erst ab real_start bis end_date
+    # Robustes Lücken-Handling: Index von real_start..user_ed, fehlende Tage = NaN
     full_idx = pd.date_range(
         start=real_start.normalize(),
         end=user_ed.normalize(),
@@ -128,7 +122,7 @@ def main(input_dir, output_file, start_date, end_date):
         tz="UTC"
     )
     df_feats.index = pd.to_datetime(df_feats.index).tz_localize("UTC")
-    df_feats = df_feats.reindex(full_idx)  # fehlende Tage → NaN
+    df_feats = df_feats.reindex(full_idx)
     df_feats.index.name = "date"
 
     # Parquet schreiben
