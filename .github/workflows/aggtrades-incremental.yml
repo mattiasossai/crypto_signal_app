@@ -9,9 +9,8 @@ on:
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
-
   schedule:
-    - cron: '25 8 * * *'
+    - cron: '0 8 * * *'  # täglich 08:00 UTC
 
 jobs:
   download-and-feature:
@@ -19,39 +18,24 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol:
-          - BTCUSDT
-          - ETHUSDT
-          - BNBUSDT
-          - SOLUSDT
-          - XRPUSDT
-          - ENAUSDT
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
       max-parallel: 1
-    env:
-      REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      REPO:       ${{ github.repository }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Setup Python
         uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
+        with: { python-version: '3.12' }
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pandas pyarrow
+        run: pip install --upgrade pandas pyarrow
 
       - name: Calc dates
         id: dates
         run: |
-          # fixed global start for 2025-files
-          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
-          # end = gestern, da heutiges ZIP noch nicht existiert
+          echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -61,18 +45,17 @@ jobs:
           DIR=historical_tech/aggTrades/features
           old=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$old" ]]; then
-            old_end=$(basename "$old" .parquet \
-              | sed -E 's/^.*_to_([0-9]{4}-[0-9]{2}-[0-9]{2})$/\1/')
+            old_end=$(basename "$old" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
             start=$(date -I -d "$old_end + 1 day")
             echo "mode=append" >> $GITHUB_OUTPUT
             echo "start=$start"  >> $GITHUB_OUTPUT
           else
-            echo "mode=fresh"                           >> $GITHUB_OUTPUT
+            echo "mode=fresh"   >> $GITHUB_OUTPUT
             echo "start=${{ steps.dates.outputs.global_start }}" >> $GITHUB_OUTPUT
           fi
-          echo "end=${{ steps.dates.outputs.today }}"             >> $GITHUB_OUTPUT
+          echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
-      - name: Download & extract aggTrades with Inception
+      - name: Download & extract aggTrades with Overlap
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
@@ -88,24 +71,20 @@ jobs:
             ENAUSDT)         INC="2024-04-02";;
             *)               INC=$SD ;;
           esac
+          [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
 
-          if [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
-            SD="$INC"
-          fi
-
-          echo "→ Download days from $SD to $ED"
+          echo "→ Downloading aggTrades from $SD to $ED (1-Day Overlap)"
           DIR=data/aggTrades/$SYMBOL
           mkdir -p "$DIR"
-          # 1-Day Overlap: Start-1
           CUR=$(date -I -d "$SD -1 day")
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -p "$ZIP" > "$DIR/${ZIP%.zip}.csv" && rm -f "$ZIP"
-            else
-              echo "⚠️ Missing $ZIP – skipping"
+              unzip -p "$ZIP" > "$DIR/${ZIP%.zip}.csv"
               rm -f "$ZIP"
+            else
+              echo "⚠️ Missing $ZIP – skipping"; rm -f "$ZIP"
             fi
             CUR=$(date -I -d "$CUR +1 day")
           done
@@ -115,9 +94,9 @@ jobs:
           mkdir -p historical_tech/aggTrades/features
           OUT="historical_tech/aggTrades/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
           python3 extract_aggTrades_features.py \
-            --input-dir   data/aggTrades/${{ matrix.symbol }} \
-            --start-date  "${{ steps.dates.outputs.global_start }}" \
-            --end-date    "${{ steps.resume.outputs.end }}" \
+            --input-dir data/aggTrades/${{ matrix.symbol }} \
+            --start-date "${{ steps.resume.outputs.start }}" \
+            --end-date   "${{ steps.resume.outputs.end }}" \
             --output-file "$OUT"
 
       - name: Commit & Push
