@@ -6,32 +6,33 @@ if [ $# -ne 4 ]; then
   exit 1
 fi
 
-SYMBOL=$1       # z.B. BTCUSDT
-INTERVAL=$2     # 1m | 5m | 15m | 1h | 4h
-START=$3        # YYYY-MM-DD
-END=$4          # YYYY-MM-DD
+SYMBOL=$1
+INTERVAL=$2
+START=$3
+END=$4
 
+# Zielverzeichnis exakt wie in deinem Repo
 TARGET="historical/historical-${SYMBOL}-${INTERVAL}"
 mkdir -p "$TARGET"
 
-# Hilfsfunktion: Datum zu Unix-Sekunden
+# Datum → Sekunden
 to_sec(){ date -d "$1" +%s; }
 
 cur="$START"
 end_sec=$(to_sec "$END")
 while [ "$(to_sec "$cur")" -le "$end_sec" ]; do
-  FILE="${TARGET}/${SYMBOL}-${INTERVAL}-${cur}.csv"
+  OUT="${TARGET}/${SYMBOL}-${INTERVAL}-${cur}.csv"
 
-  if [ -f "$FILE" ]; then
-    echo "✔️ Skipping existing $FILE"
+  if [ -f "$OUT" ]; then
+    echo "✔️ Skipping existing $OUT"
   else
     echo "→ Download ${SYMBOL}-${INTERVAL} @ $cur"
     URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${cur}.zip"
-    if curl --fail -s "$URL" | funzip > "$FILE"; then
-      echo " ✅ Saved $FILE"
+    if curl --fail -s "$URL" | funzip > "$OUT"; then
+      echo " ✅ Saved $OUT"
     else
       echo "⚠️ Not found or error: $URL"
-      rm -f "$FILE"
+      rm -f "$OUT"
     fi
   fi
 
