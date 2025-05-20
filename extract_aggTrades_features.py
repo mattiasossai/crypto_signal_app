@@ -21,114 +21,97 @@ INCEPTION = {
     "ENAUSDT": "2024-04-02",
 }
 
-EXPECTED_COLS = [
-    "agg_trade_id", "price", "quantity",
-    "first_trade_id", "last_trade_id",
-    "transact_time", "is_buyer_maker"
-]
-
 def process_one_file(fn: str) -> dict | None:
     # Header-Erkennung
     with open(fn, "r") as f:
         tokens = f.readline().strip().split(",")
-    header = tokens == EXPECTED_COLS
+    header = tokens[:7] == [
+        "agg_trade_id", "price", "quantity",
+        "first_trade_id", "last_trade_id",
+        "transact_time", "is_buyer_maker"
+    ]
 
     df = pd.read_csv(
         fn,
         header=0 if header else None,
-        names=EXPECTED_COLS if not header else None,
+        names=tokens if header else [
+            "agg_trade_id","price","quantity",
+            "first_trade_id","last_trade_id",
+            "transact_time","is_buyer_maker"
+        ],
         usecols=["quantity", "transact_time", "is_buyer_maker"],
         dtype={"quantity": float, "transact_time": int, "is_buyer_maker": bool},
     )
 
-    # Timestamp in UTC
     df["timestamp"] = pd.to_datetime(df["transact_time"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
 
-    # Tagesfenster aus dem Dateinamen
-    day_str = os.path.basename(fn).split("-aggTrades-")[1][:10]
-    sd = pd.to_datetime(day_str).tz_localize("UTC")
+    day = os.path.basename(fn).split("-aggTrades-")[1][:10]
+    sd = pd.to_datetime(day).tz_localize("UTC")
     ed = sd + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
     df_day = df[sd:ed]
 
     if df_day.empty:
-        logging.warning("Empty data for %s", day_str)
+        logging.warning("Empty data for %s", day)
         return None
 
     total   = df_day["quantity"].sum()
     buy     = df_day.loc[~df_day["is_buyer_maker"], "quantity"].sum()
-    sell    = df_day.loc[ df_day["is_buyer_maker"],  "quantity"].sum()
-    max1h   = df_day["quantity"].resample("1h").sum().max()
-    max4h   = df_day["quantity"].resample("4h").sum().max()
-    avg_trd = df_day["quantity"].resample("1min").count().mean()
-    imbalance = (buy - sell) / total if total > 0 else 0
+    sell    = df_day.loc[ df_day["is_buyer_maker"], "quantity"].sum()
 
     return {
-        "date": day_str,
+        "date": day,
         "total_volume": total,
-        "buy_volume": buy,
-        "sell_volume": sell,
-        "max_vol_1h": max1h,
-        "max_vol_4h": max4h,
-        "avg_trades_per_min": avg_trd,
-        "imbalance": imbalance,
+        "buy_volume":    buy,
+        "sell_volume":   sell,
+        "max_vol_1h":    df_day["quantity"].resample("1h").sum().max(),
+        "max_vol_4h":    df_day["quantity"].resample("4h").sum().max(),
+        "avg_trades_per_min": df_day["quantity"].resample("1min").count().mean(),
+        "imbalance":     (buy - sell) / total if total > 0 else 0,
     }
 
 def main(input_dir, output_file, start_date, end_date):
     logging.info("→ Scanning CSVs in '%s'", input_dir)
-    symbol = os.path.basename(input_dir)
-
-    # parse user-dates und Inception
+    sym    = os.path.basename(input_dir)
     user_sd = pd.to_datetime(start_date).tz_localize("UTC")
     user_ed = pd.to_datetime(end_date).tz_localize("UTC")
-    inc     = pd.to_datetime(INCEPTION.get(symbol, start_date)).tz_localize("UTC")
-    real_start = max(user_sd, inc)
+    inc     = pd.to_datetime(INCEPTION[sym]).tz_localize("UTC")
+    real_sd = max(user_sd, inc)
 
-    # 1-Tag-Overlap für Feature-Berechnung
-    sd = real_start - pd.Timedelta(days=1)
+    # 1-Day-Overlap für die Berechnung
+    sd = real_sd - pd.Timedelta(days=1)
     ed = user_ed
 
     all_csv = sorted(glob.glob(os.path.join(input_dir, "*.csv")))
-    files = [
+    files   = [
         fn for fn in all_csv
         if sd <= pd.to_datetime(os.path.basename(fn).split("-aggTrades-")[1][:10]).tz_localize("UTC") <= ed
     ]
 
     if not files:
-        logging.error("❌ No CSV files found in range; exiting.")
+        logging.error("❌ No CSVs in range → exiting.")
         return
 
-    rows = []
-    for fn in files:
-        r = process_one_file(fn)
-        if r is not None:
-            rows.append(r)
+    rows = [r for fn in files if (r := process_one_file(fn))]
 
     if not rows:
-        logging.error("❌ No data after processing; exiting.")
+        logging.error("❌ All days empty → exiting.")
         return
 
-    # DataFrame mit Datum-String-Index
-    df_feats = pd.DataFrame(rows).set_index("date").sort_index()
+    df = pd.DataFrame(rows).set_index("date").sort_index()
 
-    # Overlap-Tag (erste Zeile) verwerfen
-    df_feats = df_feats.loc[df_feats.index >= real_start.strftime("%Y-%m-%d")]
+    # Overlap-Tag verwerfen
+    df = df.loc[df.index >= real_sd.strftime("%Y-%m-%d")]
 
-    # Robustes Lücken-Handling: Index von real_start..user_ed, fehlende Tage = NaN
-    full_idx = pd.date_range(
-        start=real_start.normalize(),
-        end=user_ed.normalize(),
-        freq="D",
-        tz="UTC"
-    )
-    df_feats.index = pd.to_datetime(df_feats.index).tz_localize("UTC")
-    df_feats = df_feats.reindex(full_idx)
-    df_feats.index.name = "date"
+    # auf volle Kalender-Tage reindexen (fehlende → NaN)
+    idx = pd.date_range(real_sd.normalize(), user_ed.normalize(), freq="D", tz="UTC")
+    df.index = pd.to_datetime(df.index).tz_localize("UTC")
+    df = df.reindex(idx)
+    df.index.name = "date"
 
-    # Parquet schreiben
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    df_feats.to_parquet(output_file, compression="snappy")
-    logging.info("✅ Wrote features to %s (%d days)", output_file, len(df_feats))
+    df.to_parquet(output_file, compression="snappy")
+    logging.info("✅ Wrote %d days to %s", len(df), output_file)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
