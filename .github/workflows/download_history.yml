@@ -16,6 +16,10 @@ jobs:
         interval: [1m, 5m, 15m, 1h, 4h]
       max-parallel: 30
 
+    env:
+      # Wir schreiben das Backfill‐END ins Environment, um es im Upload‐Step zu nutzen
+      END: ${{ steps.dates.outputs.END }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -32,7 +36,7 @@ jobs:
           if compgen -G "$DIR/${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" > /dev/null; then
             LAST=$(find "$DIR" -type f \
               -name "${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" \
-              | sed -E "s/.*${{ matrix.symbol }}-${{ matrix.interval }}-([0-9\-]+)\.csv/\1/" \
+              | sed -E "s/.*${{ matrix.symbol }}-${{ matrix.interval }}-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
               | sort | tail -n1)
             START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
           else
@@ -41,6 +45,7 @@ jobs:
           END="$YESTERDAY"
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
+          echo "::set-output name=END::$END"
 
       - name: Download History Range
         shell: bash
@@ -52,11 +57,12 @@ jobs:
             "$START" \
             "$END"
 
-      - name: Upload Historical Artifact
+      - name: Upload only yesterday’s CSV
         uses: actions/upload-artifact@v4
         with:
           name: historical-${{ matrix.symbol }}-${{ matrix.interval }}
-          path: historical/historical-${{ matrix.symbol }}-${{ matrix.interval }}/*.csv
+          path: |
+            historical/historical-${{ matrix.symbol }}-${{ matrix.interval }}/${{ matrix.symbol }}-${{ matrix.interval }}-${{ env.END }}.csv
           if-no-files-found: ignore
 
   aggregate_and_push:
@@ -71,7 +77,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Download all historical-artifacts
+      - name: Download all historical artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./historical-artifacts
@@ -81,7 +87,7 @@ jobs:
         run: |
           mkdir -p historical
           find historical-artifacts -type f | while read src; do
-            rel=${src#historical-artifacts/}           # e.g. historical-BTCUSDT-1h/…
+            rel=${src#historical-artifacts/}           # etwa: historical-BTCUSDT-1h/BTCUSDT-1h-2025-05-18.csv
             dst="historical/${rel}"
             mkdir -p "$(dirname "$dst")"
             mv "$src" "$dst"
@@ -97,7 +103,7 @@ jobs:
           git reset --mixed origin/main
           git add historical
           if ! git diff --cached --quiet; then
-            git commit -m "chore(history): backfill ${START}→${END} [skip ci]"
+            git commit -m "chore(history): import ${END} [skip ci]"
             git push origin HEAD:main
           else
             echo " No changes to push"
