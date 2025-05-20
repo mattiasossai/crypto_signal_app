@@ -1,4 +1,4 @@
-name: 2️⃣📥 Download & Commit indexPriceKlines (1h & 4h)
+name: 2️⃣📂 Download & Commit indexPriceKlines (1h & 4h)
 
 on:
   workflow_dispatch:
