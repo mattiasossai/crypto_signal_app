@@ -10,26 +10,21 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 8 * * *'  # täglich 03:00 UTC
 
 jobs:
   download-and-feature:
-    name: "BookDepth ${{ matrix.symbol }} (incremental)"
+    name: "bookDepth ${{ matrix.symbol }} (incremental)"
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol:
-          - BTCUSDT
-          - ETHUSDT
-          - BNBUSDT
-          - SOLUSDT
-          - XRPUSDT
-          - ENAUSDT
-      max-parallel: 1
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+    env:
+      REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO:       ${{ github.repository }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -38,84 +33,44 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pandas pyarrow scipy
+      - name: Install deps
+        run: pip install --upgrade pandas pyarrow scipy
 
       - name: Calc dates
         id: dates
         run: |
-          # fixe global_start (für den allerersten Lauf)
-          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
-          # heutiges Datum
-          echo "today=$(date -I)"        >> $GITHUB_OUTPUT
+          echo "global_start=${{ inputs.start_date }}" >> $GITHUB_OUTPUT
+          echo "global_end=${{ inputs.end_date  }}" >> $GITHUB_OUTPUT
 
-      - name: Download & unzip bookDepth with Inception
-        shell: bash
+      - name: Download & unzip bookDepth
         run: |
           SYMBOL=${{ matrix.symbol }}
           SDG=${{ steps.dates.outputs.global_start }}
-          ED=${{ steps.dates.outputs.today }}
-
-          # Inception-Logic
-          case "$SYMBOL" in
-            BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01" ;;
-            XRPUSDT)                         INC="2023-01-06" ;;
-            ENAUSDT)                         INC="2024-04-02" ;;
-            *)                               INC="$SDG"        ;;
-          esac
-
-          # effektiver Start = max(resume, inception)
-          if [[ "$(date -d"$SDG" +%s)" -lt "$(date -d"$INC" +%s)" ]]; then
-            SD="$INC"
-          else
-            SD="$SDG"
-          fi
-
-          echo "→ Download days from $SD to $ED"
-          DIR="data/bookDepth/$SYMBOL"
-          mkdir -p "$DIR"
-
-          CUR="$SD"
+          ED=${{ steps.dates.outputs.global_end }}
+          mkdir -p data/bookDepth/$SYMBOL
+          CUR=$SDG
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
-            echo "→ Fetching $ZIP"
-            if curl -sSf \
-                 "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" \
-               -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$DIR" && rm -f "$ZIP"
-            else
-              echo "⚠️ Missing $ZIP – skipping"
-              rm -f "$ZIP"
-            fi
+            curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" \
+              -o "$ZIP" && unzip -q -o "$ZIP" -d data/bookDepth/$SYMBOL && rm -f "$ZIP" || echo "⚠️ $ZIP missing"
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Feature extraction & merge
-        shell: bash
+      - name: Feature extraction & append
         run: |
           mkdir -p historical_tech/bookDepth/features
-          # komplette OUT-Variable in einem Stück quotiert
-          OUT="historical_tech/bookDepth/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.today }}.parquet"
-          python3 extract_bookDepth_features.py \
-            --input-dir   "data/bookDepth/${{ matrix.symbol }}" \
-            --start-date  "${{ steps.dates.outputs.global_start }}" \
-            --end-date    "${{ steps.dates.outputs.today }}" \
-            --output-file "$OUT"
+          OUT=historical_tech/bookDepth/features/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.dates.outputs.global_end }}.parquet
+          python3 extract_bookDepth_features_incremental.py \
+            --input-dir   data/bookDepth/${{ matrix.symbol }} \
+            --start-date  ${{ steps.dates.outputs.global_start }} \
+            --end-date    ${{ steps.dates.outputs.global_end }} \
+            --output-file $OUT
 
       - name: Commit & Push
-        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          git pull --rebase origin main
+          git fetch origin main && git checkout main
           git add historical_tech/bookDepth/features
-          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features updated to ${{ steps.dates.outputs.today }}" || echo "No changes"
+          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features up to ${{ steps.dates.outputs.global_end }}" || echo "No changes"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-
-      - name: Cleanup raw data
-        if: always()
-        run: |
-          rm -rf "data/bookDepth/${{ matrix.symbol }}"
