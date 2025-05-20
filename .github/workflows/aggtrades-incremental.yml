@@ -1,4 +1,4 @@
-name: "📥 Incremental Download & Feature aggTrades per Symbol"
+name: "4️⃣📥 Incremental Download & Feature aggTrades per Symbol"
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
         required: true
 
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '25 8 * * *'
 
 jobs:
   download-and-feature:
