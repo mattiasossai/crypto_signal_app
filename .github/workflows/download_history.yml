@@ -3,8 +3,7 @@ name: 1️⃣🕯️ Download & Commit Historical Klines
 on:
   workflow_dispatch:
   schedule:
-    # täglich 08:00 UTC
-    - cron: '0 8 * * *'
+    - cron: '0 8 * * *'  # täglich 08:00 UTC
 
 jobs:
   download_matrix:
@@ -20,44 +19,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Install funzip
+      - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: Determine Backfill Date Range
+      - name: Determine date range
         id: dates
         shell: bash
         run: |
           YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
-          DIR="historical/historical-${{ matrix.symbol }}-${{ matrix.interval }}"
-          if compgen -G "$DIR/${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" > /dev/null; then
-            LAST=$(find "$DIR" -type f \
-              -name "${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" \
-              | sed -E "s/.*${{ matrix.symbol }}-${{ matrix.interval }}-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
-              | sort | tail -n1)
-            START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
-          else
-            START="$YESTERDAY"
-          fi
-          END="$YESTERDAY"
-          echo "START=$START" >> $GITHUB_ENV
-          echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download History Range
+          # Wenn wir schon eine CSV für gestern haben, überspringe
+          if [[ -f raw/klines/${{ matrix.symbol }}/${{ matrix.symbol }}-${{ matrix.interval }}-$YESTERDAY.csv ]]; then
+            START=$YESTERDAY
+          else
+            # Ansonsten: finde zuletzt vorhandene Datei und setze START auf den nächsten Tag
+            LAST=$(find raw/klines/${{ matrix.symbol }} -type f \
+              -name "${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" \
+              | sed -E "s/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
+              | sort | tail -n1)
+            if [[ -z "$LAST" ]]; then
+              # noch keine Dateien → nur gestern herunterladen
+              START=$YESTERDAY
+            else
+              START=$(date -I -d "$LAST +1 day")
+            fi
+          fi
+
+          END=$YESTERDAY
+          echo "::set-output name=start::$START"
+          echo "::set-output name=end::$END"
+
+      - name: Download Range
         shell: bash
         run: |
-          chmod +x historical/download_history_range.sh
-          historical/download_history_range.sh \
-            "${{ matrix.symbol }}" \
-            "${{ matrix.interval }}" \
-            "$START" \
-            "$END"
+          SYMBOL=${{ matrix.symbol }}
+          INTERVAL=${{ matrix.interval }}
+          START=${{ steps.dates.outputs.start }}
+          END=${{ steps.dates.outputs.end }}
 
-      - name: Upload only yesterday’s CSV
+          echo "→ Downloading ${SYMBOL}-${INTERVAL} from $START to $END"
+          mkdir -p raw/klines/$SYMBOL
+
+          CUR="$START"
+          while [[ "$CUR" < "$END" || "$CUR" == "$END" ]]; do
+            ZIP="${SYMBOL}-${INTERVAL}-${CUR}.zip"
+            OUT="raw/klines/${SYMBOL}/${SYMBOL}-${INTERVAL}-${CUR}.csv"
+            if [[ -f "$OUT" ]]; then
+              echo "✔️  Skip existing $OUT"
+            else
+              URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${ZIP}"
+              echo "→ Fetching $ZIP"
+              if curl -sSf "$URL" | funzip > "$OUT"; then
+                echo " ✅ Saved $OUT"
+              else
+                echo " ⚠️ Missing or error: $URL"
+                rm -f "$OUT"
+              fi
+            fi
+            CUR=$(date -I -d "$CUR +1 day")
+          done
+
+      - name: Upload artifact for yesterday
         uses: actions/upload-artifact@v4
         with:
           name: historical-${{ matrix.symbol }}-${{ matrix.interval }}
-          path: |
-            historical/historical-${{ matrix.symbol }}-${{ matrix.interval }}/*-${{ env.END }}.csv
+          path: raw/klines/${{ matrix.symbol }}/*-${{ steps.dates.outputs.end }}.csv
           if-no-files-found: ignore
 
   aggregate_and_push:
@@ -77,16 +103,17 @@ jobs:
         with:
           path: ./historical-artifacts
 
-      - name: Merge new CSVs into repo
+      - name: Merge new CSVs into raw/klines
         shell: bash
         run: |
-          mkdir -p historical
-          find historical-artifacts -type f | while read src; do
-            rel=${src#historical-artifacts/}  
-            dst="historical/${rel}"
-            mkdir -p "$(dirname "$dst")"
-            mv "$src" "$dst"
-            echo " ➕ $dst"
+          mkdir -p raw/klines
+          find historical-artifacts -type f | while read SRC; do
+            # SRC = historical-artifacts/<symbol>/<file.csv>
+            SYMBOL=$(basename $(dirname "$SRC"))
+            DST="raw/klines/${SYMBOL}/$(basename "$SRC")"
+            mkdir -p "$(dirname "$DST")"
+            mv "$SRC" "$DST"
+            echo " ➕ $DST"
           done
 
       - name: Commit & Push
@@ -96,10 +123,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add historical
+          git add raw/klines
           if ! git diff --cached --quiet; then
             git commit -m "chore(history): import ${END} [skip ci]"
             git push origin HEAD:main
           else
-            echo " No changes to push"
+            echo "✔️ No new Klines to push"
           fi
