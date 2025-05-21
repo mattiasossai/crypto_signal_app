@@ -38,11 +38,12 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pandas pyarrow scipy
+        run: pip install --upgrade pandas pyarrow scipy
 
-      - name: Make extractor script executable
-        run: chmod +x extract_bookDepth_features.py
+      - name: Make extractor & append scripts executable
+        run: |
+          chmod +x extract_bookDepth_features.py
+          chmod +x scripts/append_bookdepth.py
 
       - name: Calc dates
         id: dates
@@ -54,11 +55,11 @@ jobs:
         id: resume
         run: |
           SYMBOL=${{ matrix.symbol }}
-          DIR=features/bookDepth/${SYMBOL}
+          DIR=features/bookDepth/$SYMBOL
           mkdir -p "$DIR"
-          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$OLD" ]]; then
-            END_OLD=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
+          LAST=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$LAST" ]]; then
+            END_OLD=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
             START=$(date -I -d "$END_OLD + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
@@ -71,12 +72,11 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Inception logic
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
-            XRPUSDT)                           INC="2023-01-06";;
-            ENAUSDT)                           INC="2024-04-02";;
-            *)                                 INC=$SD ;;
+            XRPUSDT)                          INC="2023-01-06";;
+            ENAUSDT)                          INC="2024-04-02";;
+            *)                                INC=$SD;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
           mkdir -p raw/bookDepth/${SYMBOL}
@@ -90,7 +90,7 @@ jobs:
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Extract **only** the new range into tmp
+      - name: Extract only new range into tmp
         run: |
           SYMBOL=${{ matrix.symbol }}
           TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
@@ -100,36 +100,38 @@ jobs:
             --end-date   "${{ steps.resume.outputs.end }}" \
             --output-file "$TMP"
 
-      - name: Append & Cleanup
+      - name: Check for new features
+        id: checknew
+        run: |
+          TMP="features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
+          if [[ -f "$TMP" ]] && [[ $(python3 -c "import pandas as pd; print(len(pd.read_parquet('$TMP'))>0)") == "True" ]]; then
+            exit 0
+          else
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Append old + tmp & cleanup
+        if: steps.checknew.conclusion == 'success'
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
           NE=${{ steps.resume.outputs.end }}
-          DIR=features/bookDepth/${SYMBOL}
+          DIR=features/bookDepth/$SYMBOL
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1)
+          python3 scripts/append_bookdepth.py \
+            "$OLD" \
+            "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
+            "$OUT"
+          rm "$OLD" features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet
 
-          if [[ -n "$OLD" ]]; then
-            # Merge alt + tmp in einem einzigen Python-Block:
-            python3 - << 'PYCODE'
-import sys
-import pandas as pd
-
-old = pd.read_parquet(sys.argv[1])
-new = pd.read_parquet(sys.argv[2])
-pd.concat([old, new]).sort_index().to_parquet(sys.argv[3], compression="snappy")
-PYCODE
-            rm "$OLD"
-          else
-            mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
-          fi
-
-      - name: Cleanup raw data & tmp
-        run: |
-          rm -rf raw/bookDepth/${{ matrix.symbol }}
-          rm -f features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
+      - name: Cleanup raw data
+        if: always()
+        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
 
       - name: Commit & Push BookDepth
+        if: steps.checknew.conclusion == 'success'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
