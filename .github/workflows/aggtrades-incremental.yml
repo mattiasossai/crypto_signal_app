@@ -93,13 +93,21 @@ jobs:
 
       - name: Feature extraction & append
         run: |
+          # Ensure per-symbol feature folder exists
           mkdir -p features/aggTrades/${{ matrix.symbol }}
-          OUT="features/aggTrades/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
+
+          # Read our computed dates
+          START=${{ steps.resume.outputs.start }}
+          END=${{ steps.resume.outputs.end }}
+
+          # Define output path (using START…END, so overlap day von START−1 intern weggefiltert)
+          OUT=features/aggTrades/${{ matrix.symbol }}/${{ matrix.symbol }}-features-${START}_to_${END}.parquet
+
+          # Call extractor with correct args (no --out-dir)
           python3 extract_aggTrades_features.py \
-            --in-dir      data/aggTrades/${{ matrix.symbol }} \
-            --start-date  "${{ steps.resume.outputs.start }}" \
-            --end-date    "${{ steps.resume.outputs.end }}" \
-            --out-dir     features/aggTrades \
+            --input-dir   data/aggTrades/${{ matrix.symbol }} \
+            --start-date  "$START" \
+            --end-date    "$END" \
             --output-file "$OUT"
 
       - name: Commit & Push
