@@ -31,8 +31,7 @@ jobs:
         with: { python-version: '3.12' }
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pandas pyarrow
+        run: pip install --upgrade pandas pyarrow
 
       - name: Calc dates
         id: dates
@@ -44,7 +43,7 @@ jobs:
         id: resume
         run: |
           SYMBOL=${{ matrix.symbol }}
-          DIR=features/aggTrades/${{ matrix.symbol }}
+          DIR=features/aggTrades/${SYMBOL}
           old=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$old" ]]; then
             old_end=$(basename "$old" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
@@ -52,12 +51,12 @@ jobs:
             echo "mode=append" >> $GITHUB_OUTPUT
             echo "start=$start"  >> $GITHUB_OUTPUT
           else
-            echo "mode=fresh" >> $GITHUB_OUTPUT
+            echo "mode=fresh"   >> $GITHUB_OUTPUT
             echo "start=${{ steps.dates.outputs.global_start }}" >> $GITHUB_OUTPUT
           fi
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
-      - name: Download & extract aggTrades
+      - name: Download & unpack aggTrades
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
@@ -76,13 +75,13 @@ jobs:
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
 
           echo "→ Downloading aggTrades from $SD to $ED"
-          mkdir -p raw/aggTrades/"$SYMBOL"
+          DATADIR=data/aggTrades/$SYMBOL
+          mkdir -p "$DATADIR"
           CUR=$(date -I -d "$SD -1 day")
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
-            echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -p "$ZIP" > raw/aggTrades/"$SYMBOL"/"${ZIP%.zip}.csv"
+              unzip -p "$ZIP" > "$DATADIR/${ZIP%.zip}.csv"
               rm -f "$ZIP"
             else
               echo "⚠️ Missing $ZIP – skipping"
@@ -93,22 +92,21 @@ jobs:
 
       - name: Feature extraction & append
         run: |
-          # Ensure per-symbol feature folder exists
-          mkdir -p features/aggTrades/${{ matrix.symbol }}
-
-          # Read our computed dates
-          START=${{ steps.resume.outputs.start }}
-          END=${{ steps.resume.outputs.end }}
-
-          # Define output path (using START…END, so overlap day von START−1 intern weggefiltert)
-          OUT=features/aggTrades/${{ matrix.symbol }}/${{ matrix.symbol }}-features-${START}_to_${END}.parquet
-
-          # Call extractor with correct args (no --out-dir)
+          SYMBOL=${{ matrix.symbol }}
+          SD=${{ steps.resume.outputs.start }}
+          ED=${{ steps.resume.outputs.end }}
+          OUTDIR=features/aggTrades/${SYMBOL}
+          mkdir -p "$OUTDIR"
+          OUT="$OUTDIR/${SYMBOL}-features-${SD}_to_${ED}.parquet"
           python3 extract_aggTrades_features.py \
-            --input-dir   data/aggTrades/${{ matrix.symbol }} \
-            --start-date  "$START" \
-            --end-date    "$END" \
+            --input-dir   data/aggTrades/${SYMBOL} \
+            --start-date  "$SD" \
+            --end-date    "$ED" \
             --output-file "$OUT"
+
+      - name: Cleanup raw download folder
+        if: always()
+        run: rm -rf data/aggTrades/${{ matrix.symbol }}
 
       - name: Commit & Push
         run: |
@@ -116,12 +114,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout main
           git pull --rebase origin main
-          git add features/aggTrades
-          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{
-            steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}" || echo "No changes"
+          git add features/aggTrades/${{ matrix.symbol }}
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${SD} to ${ED}" || echo "No changes"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-
-      - name: Cleanup raw data
-        if: always()
-        run: |
-          rm -rf raw/aggTrades/${{ matrix.symbol }}
