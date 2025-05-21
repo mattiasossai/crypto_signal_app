@@ -111,14 +111,19 @@ jobs:
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
 
           if [[ -n "$OLD" ]]; then
-            # Inline-Python, korrekt terminiert:
-            OLD="$OLD" DIR="$DIR" SYMBOL="$SYMBOL" OUT="$OUT" python3 - << 'EOF'
-import pandas as pd, os
-old = pd.read_parquet(os.environ['OLD'])
-new = pd.read_parquet(os.path.join(os.environ['DIR'], f"tmp_{os.environ['SYMBOL']}.parquet"))
-df = pd.concat([old, new]).sort_index()
-df.to_parquet(os.environ['OUT'], compression='snappy')
-EOF
+            # wir übergeben alle vier Pfade/Variablen als Argumente an Python
+            python3 - "$OLD" "$DIR" "$SYMBOL" "$OUT" << 'PYCODE'
+import pandas as pd
+import os, sys
+
+old_path, dir_path, symbol, out_path = sys.argv[1:]
+new_path = os.path.join(dir_path, f"tmp_{symbol}.parquet")
+
+old = pd.read_parquet(old_path)
+new = pd.read_parquet(new_path)
+df  = pd.concat([old, new]).sort_index()
+df.to_parquet(out_path, compression="snappy")
+PYCODE
             rm "$OLD"
           else
             mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
