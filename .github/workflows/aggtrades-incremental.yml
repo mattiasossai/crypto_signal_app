@@ -97,18 +97,19 @@ jobs:
             --end-date   "${{ steps.resume.outputs.end }}" \
             --output-file "$TMP"
 
-      # 1) Prüfen, ob tmp-Parquet Zeilen enthält
       - name: Check for new features
         id: checknew
+        env:
+          TMP: features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         run: |
           python3 - << 'EOF'
-import pandas as pd, sys
-df = pd.read_parquet("features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet")
+import pandas as pd, sys, os
+df = pd.read_parquet(os.environ['TMP'])
+# Exit-Code 0 = neue Zeilen vorhanden, 1 = leer
 sys.exit(0 if len(df) > 0 else 1)
 EOF
         continue-on-error: true
 
-      # 2) Nur bei neuen Zeilen: Append + altes löschen
       - name: Append tmp to existing Parquet
         if: steps.checknew.conclusion == 'success'
         run: |
@@ -124,13 +125,11 @@ EOF
             "$OUT"
           rm "$OLD"
 
-      # 3) Wenn keine neuen Zeilen: tmp löschen und Job beenden
       - name: Skip—no new features
         if: steps.checknew.conclusion == 'failure'
         run: |
           echo "✔️ No new aggTrades features for ${{ matrix.symbol }}, skipping."
           rm features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
-          exit 0
 
       - name: Cleanup raw CSVs
         if: always()
