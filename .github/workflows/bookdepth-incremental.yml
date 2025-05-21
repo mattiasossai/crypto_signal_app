@@ -1,4 +1,3 @@
-# .github/workflows/bookdepth-incremental.yml
 name: "5️⃣📥🛠️ bookDepth Inc. Download & Feat."
 
 on:
@@ -40,10 +39,11 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow scipy
 
-      - name: Make scripts executable
+      - name: Make extractor & helper scripts executable
         run: |
           chmod +x extract_bookDepth_features.py
           chmod +x scripts/append_bookdepth.py
+          chmod +x scripts/check_bookdepth_tmp.py
 
       - name: Calc dates
         id: dates
@@ -102,18 +102,8 @@ jobs:
 
       - name: Check for new features
         id: checknew
-        env:
-          TMP: features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         run: |
-          echo "→ Checking if $TMP has rows…"
-          python3 - << 'EOF'
-import pandas as pd, sys, os
-tmp = os.environ['TMP']
-if os.path.exists(tmp) and len(pd.read_parquet(tmp)) > 0:
-    sys.exit(0)
-else:
-    sys.exit(1)
-EOF
+          python3 scripts/check_bookdepth_tmp.py features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         continue-on-error: true
 
       - name: Append tmp to existing Parquet
@@ -127,15 +117,16 @@ EOF
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1)
           python3 scripts/append_bookdepth.py \
             "$OLD" \
-            "$TMP" \
+            "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
             "$OUT"
           rm "$OLD"
+          rm "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
 
       - name: Skip—no new features
         if: steps.checknew.conclusion == 'failure'
         run: |
           echo "✔️ No new bookDepth features for ${{ matrix.symbol }}, skipping."
-          rm features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
+          rm "features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
 
       - name: Cleanup raw data
         if: always()
