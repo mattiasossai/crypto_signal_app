@@ -99,7 +99,7 @@ jobs:
           persist-credentials: true
 
       - name: Cleanup legacy historical-* dirs
-        run: rm -rf raw/klines/historical-*
+        run: rm -rf raw/klines/historical-*   # entfernt alle historical-… Ordner
 
       - name: Download all historical-artifacts
         uses: actions/download-artifact@v4
@@ -111,7 +111,6 @@ jobs:
         run: |
           mkdir -p raw/klines
           find historical-artifacts -type f | while read SRC; do
-            # SRC = historical-artifacts/<symbol>/<file.csv>
             SYMBOL=$(basename $(dirname "$SRC"))
             DST="raw/klines/${SYMBOL}/$(basename "$SRC")"
             mkdir -p "$(dirname "$DST")"
