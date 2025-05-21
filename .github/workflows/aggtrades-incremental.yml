@@ -24,11 +24,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v4
-        with: { python-version: '3.12' }
+        with:
+          python-version: '3.12'
 
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow
@@ -41,19 +43,15 @@ jobs:
 
       - name: Determine resume point
         id: resume
-        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           DIR=features/aggTrades/${SYMBOL}
-          echo "▶︎ Looking for existing parquet in $DIR"
-          # Wildcard must be unquoted to expand!
-          LAST=$(ls ${DIR}/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          # letztes Parquet suchen
+          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
-            echo "✔️  Found existing: $LAST"
             PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            START=$(date -I -d "$PREV_END + 1 day")
+            START=$(date -I -d "$PREV_END +1 day")
           else
-            echo "ℹ️  No existing file, starting at global_start=${{ steps.dates.outputs.global_start }}"
             START=${{ steps.dates.outputs.global_start }}
           fi
           echo "start=$START" >> $GITHUB_OUTPUT
@@ -65,7 +63,6 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-
           # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC="2019-12-31";;
