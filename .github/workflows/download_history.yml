@@ -75,6 +75,7 @@ jobs:
     name: Aggregate & Push All Historical
     needs: download_matrix
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout fresh
         uses: actions/checkout@v3
@@ -82,8 +83,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Cleanup legacy dirs
-        run: rm -rf raw/klines/*
+      # (Optional) Entferne wirklich nur alte "historical-*" Reste
+      - name: Cleanup legacy historical-* dirs
+        run: rm -rf raw/klines/historical-*
 
       - name: Download all historical-artifacts
         uses: actions/download-artifact@v4
@@ -94,10 +96,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p raw/klines
-          find historical-artifacts -type f | while read SRC; do
-            # SRC = historical-artifacts/historical-${SYMBOL}-${INTERVAL}/${file}.csv
-            SYMBOL=$(basename "$(dirname "$SRC")" | sed 's/^historical-//')
-            DST="raw/klines/${SYMBOL}/$(basename "$SRC")"
+          # Für jede CSV: Symbol = alles vor dem ersten '-'
+          find historical-artifacts -type f -name '*.csv' | while read SRC; do
+            FNAME=$(basename "$SRC")
+            SYMBOL=${FNAME%%-*}
+            DST="raw/klines/${SYMBOL}/${FNAME}"
             mkdir -p "$(dirname "$DST")"
             mv "$SRC" "$DST"
             echo " ➕ $DST"
@@ -108,10 +111,12 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --mixed origin/main
           git add raw/klines
           if git diff --cached --quiet; then
             echo "✔️ No new Klines to push"
           else
-            git commit -m "chore(history): import $(date -I -d 'yesterday') [skip ci]"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+            git commit -m "chore(history): import ${END} [skip ci]"
+            git push origin HEAD:main
           fi
