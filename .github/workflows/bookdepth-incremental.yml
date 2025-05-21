@@ -11,10 +11,10 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
   schedule:
-    - cron: '40 8 * * *'
+    - cron: '40 8 * * *'  # täglich 08:40 UTC
 
 jobs:
-  bookdepth-incremental:
+  download-and-feature:
     name: "BookDepth ${{ matrix.symbol }} (incremental)"
     runs-on: ubuntu-latest
     strategy:
@@ -40,11 +40,8 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow scipy
 
-      - name: Make scripts executable
-        run: |
-          chmod +x extract_bookDepth_features.py
-          chmod +x scripts/check_bookdepth_tmp.py
-          chmod +x scripts/append_bookdepth.py
+      - name: Make extractor executable
+        run: chmod +x extract_bookDepth_features.py
 
       - name: Calc dates
         id: dates
@@ -56,11 +53,12 @@ jobs:
         id: resume
         run: |
           SYMBOL=${{ matrix.symbol }}
-          DIR=features/bookDepth/$SYMBOL
+          DIR=features/bookDepth/${SYMBOL}
           mkdir -p "$DIR"
-          LAST=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$LAST" ]]; then
-            END_OLD=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
+          # Letztes Parquet finden
+          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$OLD" ]]; then
+            END_OLD=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
             START=$(date -I -d "$END_OLD + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
@@ -73,25 +71,26 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
+          # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
-            XRPUSDT)                          INC="2023-01-06";;
-            ENAUSDT)                          INC="2024-04-02";;
-            *)                                INC=$SD;;
+            XRPUSDT)                           INC="2023-01-06";;
+            ENAUSDT)                           INC="2024-04-02";;
+            *)                                 INC=$SD;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
-          mkdir -p raw/bookDepth/$SYMBOL
+          mkdir -p raw/bookDepth/"$SYMBOL"
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d raw/bookDepth/$SYMBOL
+              unzip -q -o "$ZIP" -d raw/bookDepth/"$SYMBOL"
             fi
             rm -f "$ZIP"
-            CUR=$(date -I -d "$CUR +1 day")
+            CUR=$(date -I -d "$CUR + 1 day")
           done
 
-      - name: Extract only new range into tmp
+      - name: Extract only the new range into tmp
         run: |
           SYMBOL=${{ matrix.symbol }}
           TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
@@ -105,7 +104,18 @@ jobs:
         id: checknew
         run: |
           TMP="features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
-          scripts/check_bookdepth_tmp.py "$TMP"
+          echo "→ Checking if $TMP contains any rows"
+          if [[ -f "$TMP" ]]; then
+            python3 - << 'EOF'
+import pandas as pd, sys
+tmp = sys.argv[1]
+df = pd.read_parquet(tmp)
+sys.exit(0 if len(df)>0 else 1)
+EOF
+          else
+            echo "✔️ No tmp file → nothing to append"
+            exit 1
+          fi
         continue-on-error: true
 
       - name: Append old + tmp & cleanup
@@ -116,12 +126,21 @@ jobs:
           NE=${{ steps.resume.outputs.end }}
           DIR=features/bookDepth/$SYMBOL
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1)
-          scripts/append_bookdepth.py \
-            "$OLD" \
-            "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
-            "$OUT"
-          rm "$OLD" features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet
+          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet | sort | tail -n1)
+          NEWTMP="$DIR/tmp_${SYMBOL}.parquet"
+
+          echo "→ Merging $OLD + $NEWTMP → $OUT"
+          python3 - << 'PYCODE'
+import pandas as pd, sys
+old, new, out = sys.argv[1:]
+df_old = pd.read_parquet(old)
+df_new = pd.read_parquet(new)
+df = pd.concat([df_old, df_new]).sort_index()
+df.to_parquet(out, compression="snappy")
+PYCODE
+
+          # tmp und altes löschen
+          rm "$OLD" "$NEWTMP"
 
       - name: Cleanup raw data
         if: always()
@@ -133,9 +152,5 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add features/bookDepth/${{ matrix.symbol }}
-          if git diff --cached --quiet; then
-            echo "✔️ No changes"
-          else
-            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-          fi
+          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
