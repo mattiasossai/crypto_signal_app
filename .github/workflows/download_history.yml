@@ -28,17 +28,15 @@ jobs:
         run: |
           YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
 
-          # Wenn wir schon eine CSV für gestern haben, überspringe
+          # existiert schon eine CSV für gestern?
           if [[ -f raw/klines/${{ matrix.symbol }}/${{ matrix.symbol }}-${{ matrix.interval }}-$YESTERDAY.csv ]]; then
             START=$YESTERDAY
           else
-            # Ansonsten: finde zuletzt vorhandene Datei und setze START auf den nächsten Tag
             LAST=$(find raw/klines/${{ matrix.symbol }} -type f \
               -name "${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" \
               | sed -E "s/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
               | sort | tail -n1)
             if [[ -z "$LAST" ]]; then
-              # noch keine Dateien → nur gestern herunterladen
               START=$YESTERDAY
             else
               START=$(date -I -d "$LAST +1 day")
@@ -46,8 +44,10 @@ jobs:
           fi
 
           END=$YESTERDAY
-          echo "::set-output name=start::$START"
-          echo "::set-output name=end::$END"
+
+          # neuer Standard: schreibe Outputs via GITHUB_OUTPUT
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=$END"     >> $GITHUB_OUTPUT
 
       - name: Download Range
         shell: bash
