@@ -5,10 +5,10 @@ on:
     inputs:
       start_date:
         description: 'Startdatum (YYYY-MM-DD)'
-        required: true
+        required: false
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
-        required: true
+        required: false
   schedule:
     - cron: '40 8 * * *'  # täglich 08:40 UTC
 
@@ -36,13 +36,12 @@ jobs:
         run: |
           pip install --upgrade pandas pyarrow scipy
 
-      - name: Make extractor script executable
-        run: chmod +x extract_bookDepth_features.py
-
       - name: Calc dates
         id: dates
         run: |
+          # Konstantes Global-Start
           echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
+          # Endpunkt = gestern
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -51,10 +50,11 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/bookDepth/${SYMBOL}
           mkdir -p "$DIR"
+          # letztes bestehendes Parquet finden
           LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
             PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            START=$(date -I -d "$PREV_END + 1 day")
+            START=$(date -I -d "$PREV_END +1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
           fi
@@ -62,62 +62,82 @@ jobs:
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
       - name: Download & unzip bookDepth
+        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
+          # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
             ENAUSDT)                           INC="2024-04-02";;
-            *)                                 INC=$SD;;
+            *)                                 INC=$SD ;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
           echo "→ Downloading bookDepth from $SD to $ED"
-          TARGET="raw/bookDepth/$SYMBOL"
-          mkdir -p "$TARGET"
+          RAW=raw/bookDepth/${SYMBOL}
+          mkdir -p "$RAW"
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$TARGET"
+              unzip -q -o "$ZIP" -d "$RAW"
               rm -f "$ZIP"
             else
               echo "⚠️ Missing $ZIP – skipping"
               rm -f "$ZIP"
             fi
-            CUR=$(date -I -d "$CUR + 1 day")
+            CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Feature extraction & append
+      - name: Extract **only** the new days into tmp Parquet
         run: |
           SYMBOL=${{ matrix.symbol }}
-          START=${{ steps.resume.outputs.start }}
-          END=${{ steps.resume.outputs.end }}
-          OUT=features/bookDepth/${SYMBOL}/${SYMBOL}-features-${START}_to_${END}.parquet
-          mkdir -p "$(dirname "$OUT")"
-          # Skript ist jetzt ausführbar und übernimmt Append-Logic intern
-          ./extract_bookDepth_features.py \
+          TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
+          python3 extract_bookDepth_features.py \
             --input-dir raw/bookDepth/${SYMBOL} \
-            --start-date "$START" \
-            --end-date   "$END" \
-            --output-file "$OUT"
+            --start-date "${{ steps.resume.outputs.start }}" \
+            --end-date   "${{ steps.resume.outputs.end }}" \
+            --output-file "$TMP"
 
-      - name: Commit & Push merged Parquet
+      - name: Append tmp to existing Parquet (or create fresh)
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --mixed origin/main
-          git add features/bookDepth/${{ matrix.symbol }}
-          if git diff --cached --quiet; then
-            echo "✔️ No new bookDepth features to push"
+          SYMBOL=${{ matrix.symbol }}
+          GS=${{ steps.dates.outputs.global_start }}
+          NE=${{ steps.resume.outputs.end }}
+          DIR=features/bookDepth/${SYMBOL}
+          OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
+          mkdir -p "$DIR"
+          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
+
+          if [[ -n "$OLD" ]]; then
+            # Append
+            python3 append_bookdepth.py \
+              "$OLD" \
+              "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
+              "$OUT"
+            # altes und tmp aufräumen
+            rm "$OLD"
+            rm "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
           else
-            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.start }} to ${{ steps.resume.outputs.end }}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+            # Erstes File
+            mv "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" "$OUT"
           fi
 
       - name: Cleanup raw data
         if: always()
         run: rm -rf raw/bookDepth/${{ matrix.symbol }}
+
+      - name: Commit & Push features
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add features/bookDepth/${{ matrix.symbol }}
+          if git diff --cached --quiet; then
+            echo "✔️ No new bookDepth features to push"
+          else
+            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${GS}→${NE}"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          fi
