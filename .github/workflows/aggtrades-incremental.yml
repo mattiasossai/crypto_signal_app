@@ -136,6 +136,7 @@ jobs:
             "features/aggTrades/${SYMBOL}/tmp_${SYMBOL}.parquet" \
             "$OUT"
           rm "$OLD"
+          rm "features/aggTrades/${SYMBOL}/tmp_${SYMBOL}.parquet"
 
       - name: Skip—no new features
         if: steps.checknew.conclusion == 'failure'
