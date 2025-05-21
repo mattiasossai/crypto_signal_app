@@ -98,13 +98,21 @@ jobs:
 
       - name: Feature extraction & append
         run: |
+          # Ensure output folder exists
           mkdir -p features/bookDepth/${{ matrix.symbol }}
-          OUT="features/bookDepth/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
+
+          # Pull in our calculated dates
+          START=${{ steps.resume.outputs.start }}
+          END=${{ steps.resume.outputs.end }}
+
+          # Build the output filepath under the new structure
+          OUT=features/bookDepth/${{ matrix.symbol }}/${{ matrix.symbol }}-features-${START}_to_${END}.parquet
+
+          # Run the extractor with all required flags
           python3 extract_bookDepth_features.py \
-            --in-dir      data/bookDepth/${{ matrix.symbol }} \
-            --start-date  "${{ steps.dates.outputs.global_start }}" \
-            --end-date    "${{ steps.resume.outputs.end }}" \
-            --out-dir     features/bookDepth \
+            --input-dir   data/bookDepth/${{ matrix.symbol }} \
+            --start-date  "$START" \
+            --end-date    "$END" \
             --output-file "$OUT"
 
       - name: Commit & Push
