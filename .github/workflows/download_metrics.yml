@@ -1,9 +1,10 @@
+# .github/workflows/download_metrics.yml
 name: 3️⃣📊 Download & Commit metrics
 
 on:
   workflow_dispatch:
   schedule:
-    # täglich 08:00 UTC
+    # täglich 08:20 UTC
     - cron: '20 8 * * *'
 
 jobs:
@@ -32,13 +33,14 @@ jobs:
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
           DATE=$END
-          BASE="data/futures/um/daily/metrics/${SYMBOL}"
+          # neuer Zielpfad: raw/metrics/<SYMBOL>/
+          BASE="raw/metrics/${SYMBOL}"
           mkdir -p "$BASE"
           ZIP="${SYMBOL}-metrics-${DATE}.zip"
           URL="https://data.binance.vision/data/futures/um/daily/metrics/${SYMBOL}/${ZIP}"
           echo "→ Fetching $ZIP"
           if curl -sSf "$URL" -o tmp.zip; then
-            unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
+            unzip -p tmp.zip > "$BASE/${SYMBOL}-metrics-${DATE}.csv"
             rm tmp.zip
             echo " ✅ extracted ${ZIP}"
           else
@@ -50,8 +52,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: data-metrics-${{ matrix.symbol }}
-          path: |
-            data/futures/um/daily/metrics/${{ matrix.symbol }}/${{ matrix.symbol }}-metrics-${{ env.END }}.csv
+          path: raw/metrics/${{ matrix.symbol }}/${{ matrix.symbol }}-metrics-${{ env.END }}.csv
           if-no-files-found: ignore
 
   aggregate_and_push:
@@ -69,20 +70,20 @@ jobs:
       - name: Download all metrics artifacts
         uses: actions/download-artifact@v4
         with:
-          path: data-artifacts
+          path: ./data-artifacts
 
-      - name: Merge metrics into historical_tech
+      - name: Merge new CSVs into raw/metrics
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="historical_tech/metrics/data-artifacts"
-          mkdir -p "$ROOT"
-          for art in data-artifacts/*; do
-            name=$(basename "$art")                      # data-metrics-<SYMBOL>
-            dst="$ROOT/$name"
-            mkdir -p "$dst"
-            mv "$art"/*.csv "$dst"/
-            echo " ➕ Moved $name → $dst"
+          mkdir -p raw/metrics
+          find data-artifacts -type f -name '*.csv' | while read SRC; do
+            # artifact folder = data-artifacts/data-metrics-<SYMBOL>
+            SYMBOL=$(basename "$(dirname "$SRC")" | sed 's/^data-metrics-//')
+            DST="raw/metrics/${SYMBOL}/$(basename "$SRC")"
+            mkdir -p "$(dirname "$DST")"
+            mv "$SRC" "$DST"
+            echo " ➕ Moved $SRC → $DST"
           done
 
       - name: Commit & Push metrics
@@ -92,7 +93,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add historical_tech/metrics/data-artifacts
+          git add raw/metrics
           if git diff --cached --quiet; then
             echo "✅ No new metrics to commit"
           else
