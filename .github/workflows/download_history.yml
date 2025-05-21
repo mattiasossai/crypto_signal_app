@@ -98,6 +98,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Cleanup legacy historical-* dirs
+        run: rm -rf raw/klines/historical-*
+
       - name: Download all historical-artifacts
         uses: actions/download-artifact@v4
         with:
