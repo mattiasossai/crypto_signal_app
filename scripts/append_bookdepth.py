@@ -3,18 +3,21 @@ import sys
 import pandas as pd
 
 """
-append_bookdepth.py
+append_bookDepth.py
 
-Argumente:
-  1) path zum alten Parquet
-  2) path zum neuen tmp_<SYMBOL>.parquet
-  3) path zum Out-Parquet
+1) Pfad zum alten Parquet
+2) Pfad zum neuen tmp_<SYMBOL>.parquet
+3) Pfad zum Out-Parquet
 
-Fügt beide DataFrames zusammen, sortiert nach Index (date) 
-und schreibt das Ergebnis mit Snappy-Kompression.
+Fügt beide DataFrames zusammen, sortiert und schreibt mit Snappy-Kompression.
 """
 old_path, new_path, out_path = sys.argv[1:]
-old = pd.read_parquet(old_path)
-new = pd.read_parquet(new_path)
-df  = pd.concat([old, new]).sort_index()
+df_old = pd.read_parquet(old_path) if old_path else None
+df_new = pd.read_parquet(new_path)
+
+if df_old is not None:
+    df = pd.concat([df_old, df_new]).sort_index()
+else:
+    df = df_new
+
 df.to_parquet(out_path, compression="snappy")
