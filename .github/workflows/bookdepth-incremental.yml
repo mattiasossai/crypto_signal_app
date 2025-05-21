@@ -10,11 +10,10 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
   schedule:
-    - cron: '40 8 * * *'  # täglich 08:40 UTC
+    - cron: '40 8 * * *'
 
 jobs:
   download-and-feature:
-    name: "BookDepth ${{ matrix.symbol }} (incremental)"
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -22,11 +21,13 @@ jobs:
       max-parallel: 1
 
     steps:
-      - name: Checkout
+      - name: Checkout & sync
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
+      - name: Sync remote main
+        run: git pull --rebase origin main
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -34,14 +35,13 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pandas pyarrow scipy
+        run: pip install --upgrade pandas pyarrow scipy
 
       - name: Make extractor script executable
         run: chmod +x extract_bookDepth_features.py
         
       - name: Make append script executable
-        run: chmod +x scripts/append_bookdepth.py
+        run: chmod +x scripts/append_bookdepth.py  
 
       - name: Calc dates
         id: dates
@@ -83,10 +83,8 @@ jobs:
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
               unzip -q -o "$ZIP" -d raw/bookDepth/"$SYMBOL"
-              rm -f "$ZIP"
-            else
-              rm -f "$ZIP"
             fi
+            rm -f "$ZIP"
             CUR=$(date -I -d "$CUR +1 day")
           done
 
@@ -95,26 +93,26 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           START=${{ steps.resume.outputs.start }}
           END=${{ steps.resume.outputs.end }}
-          DIR=features/bookDepth/${SYMBOL}
-          OUT="${DIR}/${SYMBOL}-features-${START}_to_${END}.parquet"
-          mkdir -p "$DIR"
-          # unser extractor übernimmt intern resume/append logic
+          OUT=features/bookDepth/${SYMBOL}/${SYMBOL}-features-${START}_to_${END}.parquet
+          mkdir -p "$(dirname "$OUT")"
           python3 extract_bookDepth_features.py \
             --input-dir raw/bookDepth/${SYMBOL} \
             --start-date "$START" \
             --end-date   "$END" \
             --output-file "$OUT"
 
-      - name: Cleanup tmp raw data
+      - name: Cleanup raw data
         if: always()
-        run: |
-          rm -rf raw/bookDepth/${{ matrix.symbol }}
+        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
 
       - name: Commit & Push BookDepth
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add features/bookDepth/${{ matrix.symbol }}
-          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}" || echo "✔️ No changes"
-          git push origin HEAD:main 
+          if git diff --cached --quiet; then
+            echo "✔️ No changes"
+          else
+            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}"
+            git push origin HEAD:main
+          fi
