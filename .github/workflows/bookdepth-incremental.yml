@@ -1,3 +1,4 @@
+# .github/workflows/bookdepth-incremental.yml
 name: "5️⃣📥🛠️ bookDepth Inc. Download & Feat."
 
 on:
@@ -39,11 +40,8 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow scipy
 
-      - name: Make extractor & helper scripts executable
-        run: |
-          chmod +x extract_bookDepth_features.py
-          chmod +x scripts/append_bookdepth.py
-          chmod +x scripts/check_bookdepth_tmp.py
+      - name: Make extractor script executable
+        run: chmod +x extract_bookDepth_features.py
 
       - name: Calc dates
         id: dates
@@ -57,10 +55,10 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/bookDepth/$SYMBOL
           mkdir -p "$DIR"
-          OLD=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$OLD" ]]; then
-            END_OLD=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
-            START=$(date -I -d "$END_OLD + 1 day")
+          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$LAST" ]]; then
+            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
+            START=$(date -I -d "$PREV_END + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
           fi
@@ -90,53 +88,31 @@ jobs:
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Extract **only** the new range into tmp
-        run: |
-          SYMBOL=${{ matrix.symbol }}
-          TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
-          python3 extract_bookDepth_features.py \
-            --input-dir raw/bookDepth/${SYMBOL} \
-            --start-date "${{ steps.resume.outputs.start }}" \
-            --end-date   "${{ steps.resume.outputs.end }}" \
-            --output-file "$TMP"
-
-      - name: Check for new features
-        id: checknew
-        run: |
-          python3 scripts/check_bookdepth_tmp.py features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
-        continue-on-error: true
-
-      - name: Append tmp to existing Parquet
-        if: steps.checknew.conclusion == 'success'
+      - name: Extract & Append via Script
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
           NE=${{ steps.resume.outputs.end }}
-          DIR=features/bookDepth/$SYMBOL
-          OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1)
-          python3 scripts/append_bookdepth.py \
-            "$OLD" \
-            "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
-            "$OUT"
-          rm "$OLD"
-          rm "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
-
-      - name: Skip—no new features
-        if: steps.checknew.conclusion == 'failure'
-        run: |
-          echo "✔️ No new bookDepth features for ${{ matrix.symbol }}, skipping."
-          rm "features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
+          OUT="features/bookDepth/${SYMBOL}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
+          mkdir -p "$(dirname "$OUT")"
+          python3 extract_bookDepth_features.py \
+            --input-dir raw/bookDepth/${SYMBOL} \
+            --start-date "$START" \
+            --end-date   "$NE" \
+            --output-file "$OUT"
 
       - name: Cleanup raw data
         if: always()
         run: rm -rf raw/bookDepth/${{ matrix.symbol }}
 
       - name: Commit & Push BookDepth
-        if: steps.checknew.conclusion == 'success'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add features/bookDepth/${{ matrix.symbol }}
-          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          if git diff --cached --quiet; then
+            echo "✔️ No changes to BookDepth features for ${{ matrix.symbol }}"
+          else
+            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          fi
