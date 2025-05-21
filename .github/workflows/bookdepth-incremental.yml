@@ -36,6 +36,12 @@ jobs:
         run: |
           pip install --upgrade pandas pyarrow scipy
 
+      - name: Make extractor script executable
+        run: chmod +x extract_bookDepth_features.py
+        
+      - name: Make append script executable
+        run: chmod +x scripts/append_bookdepth.py
+
       - name: Calc dates
         id: dates
         run: |
