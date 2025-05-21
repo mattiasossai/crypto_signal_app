@@ -1,4 +1,3 @@
-# .github/workflows/aggtrades-incremental.yml
 name: "4️⃣📥🛠️ aggTrades Inc. Download & Feat."
 
 on:
@@ -45,12 +44,11 @@ jobs:
       - name: Determine resume point
         id: resume
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          DIR=features/aggTrades/${SYMBOL}
+          DIR=features/aggTrades/${{ matrix.symbol }}
           mkdir -p "$DIR"
-          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          LAST=$(ls $DIR/${{ matrix.symbol }}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
-            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
             START=$(date -I -d "$PREV_END + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
@@ -58,7 +56,21 @@ jobs:
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
+      - name: Check date range
+        id: dr
+        run: |
+          sd_ts=$(date -d "${{ steps.resume.outputs.start }}" +%s)
+          ed_ts=$(date -d "${{ steps.resume.outputs.end }}" +%s)
+          [[ "$sd_ts" -le "$ed_ts" ]] && echo "run=true" >> $GITHUB_OUTPUT || echo "run=false" >> $GITHUB_OUTPUT
+
+      - name: Skip—no new date range
+        if: steps.dr.outputs.run == 'false'
+        run: |
+          echo "✔️ Start > End, nothing to do for ${{ matrix.symbol }}."
+          exit 0
+
       - name: Download & extract aggTrades (1-day overlap)
+        if: steps.dr.outputs.run == 'true'
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
@@ -72,42 +84,37 @@ jobs:
             *)               INC=$SD ;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
-          echo "→ Downloading aggTrades from $SD to $ED (1-day overlap)"
           TARGET="data/aggTrades/$SYMBOL"
           mkdir -p "$TARGET"
           CUR=$(date -I -d "$SD -1 day")
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
+            echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
               unzip -p "$ZIP" > "$TARGET/${ZIP%.zip}.csv"
               rm -f "$ZIP"
             else
-              echo "⚠️ Missing $ZIP – skipping"; rm -f "$ZIP"
+              echo "⚠️ Missing $ZIP – skipping"
+              rm -f "$ZIP"
             fi
             CUR=$(date -I -d "$CUR + 1 day")
           done
 
       - name: Extract **only** the new day into tmp parquet
+        if: steps.dr.outputs.run == 'true'
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          TMP="features/aggTrades/${SYMBOL}/tmp_${SYMBOL}.parquet"
+          TMP="features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
           python3 extract_aggTrades_features.py \
-            --input-dir  data/aggTrades/${SYMBOL} \
+            --input-dir  data/aggTrades/${{ matrix.symbol }} \
             --start-date "${{ steps.resume.outputs.start }}" \
             --end-date   "${{ steps.resume.outputs.end }}" \
             --output-file "$TMP"
 
       - name: Check for new features
+        if: steps.dr.outputs.run == 'true'
         id: checknew
-        env:
-          TMP: features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         run: |
-          python3 - << 'EOF'
-import pandas as pd, sys, os
-df = pd.read_parquet(os.environ['TMP'])
-# Exit-Code 0 = neue Zeilen vorhanden, 1 = leer
-sys.exit(0 if len(df) > 0 else 1)
-EOF
+          python3 scripts/check_tmp.py features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         continue-on-error: true
 
       - name: Append tmp to existing Parquet
@@ -119,7 +126,7 @@ EOF
           DIR=features/aggTrades/$SYMBOL
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
-          python3 append_aggtrades.py \
+          python3 scripts/append_aggtrades.py \
             "$OLD" \
             "features/aggTrades/${SYMBOL}/tmp_${SYMBOL}.parquet" \
             "$OUT"
@@ -142,5 +149,5 @@ EOF
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main
           git add features/aggTrades/${{ matrix.symbol }}
-          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}"
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
