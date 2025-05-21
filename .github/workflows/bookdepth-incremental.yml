@@ -120,7 +120,7 @@ jobs:
 
           if [[ -n "$OLD" ]]; then
             # Append
-            python3 append_bookdepth.py \
+            python3 scripts/append_bookdepth.py \
               "$OLD" \
               "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
               "$OUT"
