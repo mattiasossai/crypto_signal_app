@@ -28,6 +28,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+
       - name: Pull remote main
         run: git pull --rebase origin main
 
@@ -36,7 +37,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install --upgrade pandas pyarrow scipy
 
       - name: Make scripts executable
@@ -71,7 +72,6 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Inception logic, set INC per symbol if needed...
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
@@ -90,7 +90,7 @@ jobs:
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Extract only new range into tmp
+      - name: Extract **only** the new range into tmp
         run: |
           SYMBOL=${{ matrix.symbol }}
           TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
@@ -100,41 +100,50 @@ jobs:
             --end-date   "${{ steps.resume.outputs.end }}" \
             --output-file "$TMP"
 
-      - name: Append or Fresh
+      - name: Check for new features
+        id: checknew
+        run: |
+          python3 - << 'EOF'
+import pandas as pd, sys, os
+tmp = sys.argv[1]
+if os.path.exists(tmp) and len(pd.read_parquet(tmp))>0:
+    sys.exit(0)
+else:
+    sys.exit(1)
+EOF
+        args: features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
+        continue-on-error: true
+
+      - name: Append tmp to existing Parquet
+        if: steps.checknew.conclusion == 'success'
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
           NE=${{ steps.resume.outputs.end }}
           DIR=features/bookDepth/$SYMBOL
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          mkdir -p "$DIR"
-          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
+          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1)
+          python3 scripts/append_bookdepth.py \
+            "$OLD" \
+            "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
+            "$OUT"
+          rm "$OLD"
 
-          if [[ -n "$OLD" ]]; then
-            # Append mode
-            python3 scripts/append_bookdepth.py \
-              "$OLD" \
-              "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
-              "$OUT"
-            rm "$OLD"
-          else
-            # Fresh mode
-            mv "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" "$OUT"
-          fi
-
-      - name: Cleanup raw & tmp
+      - name: Skip—no new features
+        if: steps.checknew.conclusion == 'failure'
         run: |
-          rm -rf raw/bookDepth/${{ matrix.symbol }}
-          rm -f features/bookDepth/${{ matrix.symbol }}/tmp_*.parquet
+          echo "✔️ No new bookDepth features for ${{ matrix.symbol }}, skipping."
+          rm features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
+
+      - name: Cleanup raw data
+        if: always()
+        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
 
       - name: Commit & Push BookDepth
+        if: steps.checknew.conclusion == 'success'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add features/bookDepth/${{ matrix.symbol }}
-          if git diff --cached --quiet; then
-            echo "✔️ No changes"
-          else
-            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-          fi
+          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
