@@ -24,15 +24,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Setup Python
         uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
+        with: { python-version: '3.12' }
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: pip install --upgrade pandas pyarrow
 
       - name: Calc dates
@@ -46,23 +44,25 @@ jobs:
         run: |
           SYMBOL=${{ matrix.symbol }}
           DIR=features/aggTrades/${SYMBOL}
-          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          # finde zuletzt erzeugtes Parquet
+          LAST=$(ls "$DIR/${SYMBOL}-features-*.parquet" 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
-            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            START=$(date -I -d "$PREV_END + 1 day")
+            prev_end=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            start=$(date -I -d "$prev_end + 1 day")
           else
-            START=${{ steps.dates.outputs.global_start }}
+            start=${{ steps.dates.outputs.global_start }}
           fi
-          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "start=$start" >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
-      - name: Download & unpack raw CSVs
+      - name: Download & extract aggTrades with Overlap
+        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
 
-          # Inception
+          # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC="2019-12-31";;
             XRPUSDT)         INC="2020-01-06";;
@@ -73,53 +73,32 @@ jobs:
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
 
-          mkdir -p data/aggTrades/${SYMBOL}
-          CUR=$(date -I -d "$SD - 1 day")
-          while [[ "$CUR" <= "$ED" ]]; do
+          echo "→ Downloading aggTrades from $SD to $ED (1-Day Overlap)"
+          DIR=data/aggTrades/$SYMBOL
+          mkdir -p "$DIR"
+          CUR=$(date -I -d "$SD -1 day")
+          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
+            echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -p "$ZIP" > data/aggTrades/${SYMBOL}/${ZIP%.zip}.csv
-              rm "$ZIP"
+              unzip -p "$ZIP" > "$DIR/${ZIP%.zip}.csv"
+              rm -f "$ZIP"
+            else
+              echo "⚠️ Missing $ZIP – skipping"
+              rm -f "$ZIP"
             fi
-            CUR=$(date -I -d "$CUR + 1 day")
+            CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Extract features to temp parquet
+      - name: Feature extraction & append
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          TMP="tmp_${SYMBOL}.parquet"
+          mkdir -p features/aggTrades/${{ matrix.symbol }}
+          OUT="features/aggTrades/${{ matrix.symbol }}/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
           python3 extract_aggTrades_features.py \
-            --input-dir  data/aggTrades/${SYMBOL} \
+            --input-dir  data/aggTrades/${{ matrix.symbol }} \
             --start-date "${{ steps.resume.outputs.start }}" \
             --end-date   "${{ steps.resume.outputs.end }}" \
-            --output-file "$TMP"
-
-      - name: Combine with existing parquet (append/overwrite)
-        shell: bash
-        run: |
-          SYMBOL=${{ matrix.symbol }}
-          GS=${{ steps.dates.outputs.global_start }}
-          NE=${{ steps.resume.outputs.end }}
-          DIR=features/aggTrades/${SYMBOL}
-          mkdir -p "$DIR"
-          OUT="$DIR/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-
-          # Wenn es schon ein altes File gibt, dann anhängen
-          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$OLD" ]]; then
-            python3 - << 'EOF'
-import pandas as pd, os, sys
-old = pd.read_parquet("$OLD")
-new = pd.read_parquet("tmp_${SYMBOL}.parquet")
-df = pd.concat([old, new]).sort_index()
-df.to_parquet("$OUT", compression="snappy")
-EOF
-            rm "$OLD"
-          else
-            mv "tmp_${SYMBOL}.parquet" "$OUT"
-          fi
-
-          git add "$OUT"
+            --output-file "$OUT"
 
       - name: Commit & Push
         run: |
@@ -127,9 +106,10 @@ EOF
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout main
           git pull --rebase origin main
-          git commit -m "♻️ ${SYMBOL} aggTrades features ${GS}→${NE}" || echo "No changes"
+          git add features/aggTrades/${{ matrix.symbol }}
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}" || echo "No changes"
           git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
 
-      - name: Cleanup raw CSVs
-        if: ${{ always() }}
+      - name: Cleanup raw data
+        if: always()
         run: rm -rf data/aggTrades/${{ matrix.symbol }}
