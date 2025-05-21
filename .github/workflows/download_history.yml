@@ -1,10 +1,9 @@
-name: 1️⃣🕯️ Download & Commit Historical Klines
+name: "1️⃣🕯️ Download & Commit Historical Klines"
 
 on:
   workflow_dispatch:
   schedule:
-    # täglich 08:00 UTC
-    - cron: '0 8 * * *'
+    - cron: '0 8 * * *'  # täglich 08:00 UTC
 
 jobs:
   download_matrix:
@@ -19,6 +18,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
@@ -50,7 +52,6 @@ jobs:
           START=${{ env.START }}
           END=${{ env.END }}
 
-          # Zielverzeichnis in deiner neuen Struktur
           TARGET="raw/klines/${SYMBOL}"
           mkdir -p "$TARGET"
 
@@ -77,12 +78,16 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Ensure we're synced to latest main
           git fetch origin main
           git reset --mixed origin/main
+          
           git add raw/klines/${{ matrix.symbol }}
           if git diff --cached --quiet; then
             echo "✔️ No new Klines to push for ${{ matrix.symbol }} @ ${{ matrix.interval }}"
           else
             git commit -m "chore(history): import ${{ matrix.symbol }}-${{ matrix.interval }}-${{ env.END }} [skip ci]"
+            git pull --rebase origin main
             git push origin HEAD:main
           fi
