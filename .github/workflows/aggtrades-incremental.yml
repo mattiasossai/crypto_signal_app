@@ -41,18 +41,22 @@ jobs:
 
       - name: Determine resume point
         id: resume
+        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           DIR=features/aggTrades/${SYMBOL}
-          # finde zuletzt erzeugtes Parquet
-          LAST=$(ls "$DIR/${SYMBOL}-features-*.parquet" 2>/dev/null | sort | tail -n1 || true)
+          echo "▶︎ Looking for existing parquet in $DIR"
+          # Wildcard must be unquoted to expand!
+          LAST=$(ls ${DIR}/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
-            prev_end=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            start=$(date -I -d "$prev_end + 1 day")
+            echo "✔️  Found existing: $LAST"
+            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            START=$(date -I -d "$PREV_END + 1 day")
           else
-            start=${{ steps.dates.outputs.global_start }}
+            echo "ℹ️  No existing file, starting at global_start=${{ steps.dates.outputs.global_start }}"
+            START=${{ steps.dates.outputs.global_start }}
           fi
-          echo "start=$start" >> $GITHUB_OUTPUT
+          echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
       - name: Download & extract aggTrades with Overlap
