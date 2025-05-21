@@ -34,7 +34,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install --upgrade pandas pyarrow
+        run: |
+          pip install --upgrade pandas pyarrow
 
       - name: Calc dates
         id: dates
@@ -110,7 +111,7 @@ jobs:
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
 
           if [[ -n "$OLD" ]]; then
-            # Hier rufen wir Python inline auf, ganz ohne YAML-Heredoc-Probleme:
+            # Inline-Python, korrekt terminiert:
             OLD="$OLD" DIR="$DIR" SYMBOL="$SYMBOL" OUT="$OUT" python3 - << 'EOF'
 import pandas as pd, os
 old = pd.read_parquet(os.environ['OLD'])
