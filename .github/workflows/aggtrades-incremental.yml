@@ -1,4 +1,3 @@
-# .github/workflows/aggtrades-incremental.yml
 name: "4️⃣📥🛠️ aggTrades Inc. Download & Feat."
 
 on:
@@ -33,13 +32,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pip install --upgrade pandas pyarrow
 
-      - name: Calculate dates
+      - name: Calc dates
         id: dates
         run: |
-          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
+          echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -47,23 +46,23 @@ jobs:
         run: |
           SYMBOL=${{ matrix.symbol }}
           DIR=features/aggTrades/${SYMBOL}
-          last=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$last" ]]; then
-            prev_end=$(basename "$last" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            start=$(date -I -d "$prev_end + 1 day")
+          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$LAST" ]]; then
+            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            START=$(date -I -d "$PREV_END + 1 day")
           else
-            start=${{ steps.dates.outputs.global_start }}
+            START=${{ steps.dates.outputs.global_start }}
           fi
-          echo "start=$start" >> $GITHUB_OUTPUT
+          echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
-      - name: Download & unpack aggTrades (1-Day Overlap)
-        shell: bash
+      - name: Download & unpack raw CSVs
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
 
+          # Inception
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC="2019-12-31";;
             XRPUSDT)         INC="2020-01-06";;
@@ -74,18 +73,28 @@ jobs:
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
 
-          mkdir -p data/aggTrades/$SYMBOL
-          CUR=$(date -I -d "$SD -1 day")
+          mkdir -p data/aggTrades/${SYMBOL}
+          CUR=$(date -I -d "$SD - 1 day")
           while [[ "$CUR" <= "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -p "$ZIP" > data/aggTrades/"$SYMBOL"/"${ZIP%.zip}.csv"
+              unzip -p "$ZIP" > data/aggTrades/${SYMBOL}/${ZIP%.zip}.csv
               rm "$ZIP"
             fi
-            CUR=$(date -I -d "$CUR +1 day")
+            CUR=$(date -I -d "$CUR + 1 day")
           done
 
-      - name: Merge into Parquet & append
+      - name: Extract features to temp parquet
+        run: |
+          SYMBOL=${{ matrix.symbol }}
+          TMP="tmp_${SYMBOL}.parquet"
+          python3 extract_aggTrades_features.py \
+            --input-dir  data/aggTrades/${SYMBOL} \
+            --start-date "${{ steps.resume.outputs.start }}" \
+            --end-date   "${{ steps.resume.outputs.end }}" \
+            --output-file "$TMP"
+
+      - name: Combine with existing parquet (append/overwrite)
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
@@ -93,43 +102,33 @@ jobs:
           NE=${{ steps.resume.outputs.end }}
           DIR=features/aggTrades/${SYMBOL}
           mkdir -p "$DIR"
+          OUT="$DIR/${SYMBOL}-features-${GS}_to_${NE}.parquet"
 
-          OLD_PATTERN="$DIR/${SYMBOL}-features-${GS}_to_*.parquet"
-          TMP_FILE=$(mktemp --suffix=.parquet)
-          OUT_FILE="$DIR/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-
-          # neue Tage extrahieren
-          python3 extract_aggTrades_features.py \
-            --input-dir data/aggTrades/${SYMBOL} \
-            --start-date "${{ steps.resume.outputs.start }}" \
-            --end-date "${NE}" \
-            --output-file "$TMP_FILE"
-
-          # falls altes File existiert, zusammenführen
-          if compgen -G "$OLD_PATTERN" > /dev/null; then
-            EXISTING=$(ls $OLD_PATTERN)
-            python3 - <<EOF
-import pandas as pd
-old = pd.read_parquet("${EXISTING}")
-new = pd.read_parquet("${TMP_FILE}")
-df  = pd.concat([old, new]).sort_index()
-df.to_parquet("${OUT_FILE}", compression="snappy")
+          # Wenn es schon ein altes File gibt, dann anhängen
+          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$OLD" ]]; then
+            python3 - << 'EOF'
+import pandas as pd, os, sys
+old = pd.read_parquet("$OLD")
+new = pd.read_parquet("tmp_${SYMBOL}.parquet")
+df = pd.concat([old, new]).sort_index()
+df.to_parquet("$OUT", compression="snappy")
 EOF
-            rm "${EXISTING}"
+            rm "$OLD"
           else
-            mv "${TMP_FILE}" "${OUT_FILE}"
+            mv "tmp_${SYMBOL}.parquet" "$OUT"
           fi
 
-          git add "${OUT_FILE}"
+          git add "$OUT"
 
       - name: Commit & Push
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout main
           git pull --rebase origin main
-          git commit -m "♻️ ${{ matrix.symbol }} aggTrades features ${GS}→${NE}" || echo "No changes to commit"
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
+          git commit -m "♻️ ${SYMBOL} aggTrades features ${GS}→${NE}" || echo "No changes"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
 
       - name: Cleanup raw CSVs
         if: ${{ always() }}
