@@ -62,13 +62,17 @@ jobs:
           OLD=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
 
           if [[ -n "$OLD" ]]; then
+            # Extrahiere das letzte Datum aus dem Dateinamen
             PREV_END=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            # Rechne 1 Tag dazu (ohne Leerzeichen um das +)
+            NEXT=$(date -I -d "$PREV_END +1 day")
             echo "mode=append" >> $GITHUB_OUTPUT
-            echo "start=$(date -I -d \"$PREV_END + 1 day\")" >> $GITHUB_OUTPUT
+            echo "start=$NEXT"      >> $GITHUB_OUTPUT
           else
-            echo "mode=fresh" >> $GITHUB_OUTPUT
+            echo "mode=fresh"       >> $GITHUB_OUTPUT
             echo "start=${{ steps.dates.outputs.global_start }}" >> $GITHUB_OUTPUT
           fi
+
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
       # 6) Download
