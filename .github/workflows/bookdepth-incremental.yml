@@ -46,7 +46,6 @@ jobs:
       - name: Calc dates
         id: dates
         run: |
-          # Global-Einstein-Start (falls kein bestehendes file da ist)
           echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
@@ -56,15 +55,17 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/bookDepth/$SYMBOL
           mkdir -p "$DIR"
-          # wenn schon Features da sind, resume Tag = letztes +1
-          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          # find last parquet, calculate next start day
+          LAST=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
             PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
             START=$(date -I -d "$PREV_END + 1 day")
           else
+            PREV_END=""
             START=${{ steps.dates.outputs.global_start }}
           fi
-          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "prev_end=$PREV_END" >> $GITHUB_OUTPUT
+          echo "start=$START"     >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
       - name: Download & unzip bookDepth
@@ -72,7 +73,7 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Symbol-spezielles Inception fallback
+          # symbol-specific inception fallback
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
@@ -80,33 +81,46 @@ jobs:
             *)                                 INC=$SD;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
-
           echo "→ Downloading bookDepth from $SD to $ED"
-          RAWDIR=raw/bookDepth/$SYMBOL
-          mkdir -p "$RAWDIR"
+          RAW=raw/bookDepth/$SYMBOL
+          mkdir -p "$RAW"
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$RAWDIR"
+              unzip -q -o "$ZIP" -d "$RAW"
             fi
             rm -f "$ZIP"
             CUR=$(date -I -d "$CUR + 1 day")
           done
 
-      - name: Extract & append (or fresh create)
+      - name: Extract & write combined Parquet
         run: |
           SYMBOL=${{ matrix.symbol }}
           START=${{ steps.resume.outputs.start }}
           END=${{ steps.resume.outputs.end }}
           OUT=features/bookDepth/${SYMBOL}/${SYMBOL}-features-${START}_to_${END}.parquet
           mkdir -p "$(dirname "$OUT")"
-          echo "→ Extracting & merging into $OUT"
+          echo "→ Extracting & merging (if append) into $OUT"
           python3 extract_bookDepth_features.py \
             --input-dir raw/bookDepth/${SYMBOL} \
             --start-date "$START" \
             --end-date   "$END" \
             --output-file "$OUT"
+
+      - name: Remove old Parquet (if existed)
+        if: always()
+        run: |
+          SYMBOL=${{ matrix.symbol }}
+          PREV=${{ steps.resume.outputs.prev_end }}
+          GS=${{ steps.dates.outputs.global_start }}
+          if [[ -n "$PREV" ]]; then
+            OLD=features/bookDepth/$SYMBOL/${SYMBOL}-features-${GS}_to_${PREV}.parquet
+            if [[ -f "$OLD" ]]; then
+              echo "→ Removing old file $OLD"
+              rm "$OLD"
+            fi
+          fi
 
       - name: Cleanup raw
         if: always()
