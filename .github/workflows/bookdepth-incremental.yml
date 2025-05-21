@@ -14,7 +14,7 @@ on:
     - cron: '40 8 * * *'
 
 jobs:
-  download-and-feature:
+  bookdepth-incremental:
     name: "BookDepth ${{ matrix.symbol }} (incremental)"
     runs-on: ubuntu-latest
     strategy:
@@ -43,6 +43,7 @@ jobs:
       - name: Make scripts executable
         run: |
           chmod +x extract_bookDepth_features.py
+          chmod +x scripts/check_bookdepth_tmp.py
           chmod +x scripts/append_bookdepth.py
 
       - name: Calc dates
@@ -72,7 +73,6 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Inception logic
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                          INC="2023-01-06";;
@@ -80,12 +80,12 @@ jobs:
             *)                                INC=$SD;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
-          mkdir -p raw/bookDepth/${SYMBOL}
+          mkdir -p raw/bookDepth/$SYMBOL
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d raw/bookDepth/${SYMBOL}
+              unzip -q -o "$ZIP" -d raw/bookDepth/$SYMBOL
             fi
             rm -f "$ZIP"
             CUR=$(date -I -d "$CUR +1 day")
@@ -105,16 +105,7 @@ jobs:
         id: checknew
         run: |
           TMP="features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
-          if [[ -f "$TMP" ]] && python3 - << 'PYCODE'
-import pandas as pd, sys
-df = pd.read_parquet(sys.argv[1])
-sys.exit(0 if len(df) > 0 else 1)
-PYCODE
-          then
-            exit 0
-          else
-            exit 1
-          fi
+          scripts/check_bookdepth_tmp.py "$TMP"
         continue-on-error: true
 
       - name: Append old + tmp & cleanup
@@ -126,7 +117,7 @@ PYCODE
           DIR=features/bookDepth/$SYMBOL
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
           OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1)
-          python3 scripts/append_bookdepth.py \
+          scripts/append_bookdepth.py \
             "$OLD" \
             "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
             "$OUT"
