@@ -1,3 +1,4 @@
+# .github/workflows/aggtrades-incremental.yml
 name: "4️⃣📥🛠️ aggTrades Inc. Download & Feat."
 
 on:
@@ -77,15 +78,13 @@ jobs:
           CUR=$(date -I -d "$SD -1 day")
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
-            echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
               unzip -p "$ZIP" > "$TARGET/${ZIP%.zip}.csv"
               rm -f "$ZIP"
             else
-              echo "⚠️ Missing $ZIP – skipping"
-              rm -f "$ZIP"
+              echo "⚠️ Missing $ZIP – skipping"; rm -f "$ZIP"
             fi
-            CUR=$(date -I -d "$CUR +1 day")
+            CUR=$(date -I -d "$CUR + 1 day")
           done
 
       - name: Extract **only** the new day into tmp parquet
@@ -98,40 +97,51 @@ jobs:
             --end-date   "${{ steps.resume.outputs.end }}" \
             --output-file "$TMP"
 
-      - name: Append tmp to the existing Parquet (or create fresh)
+      # 1) Prüfen, ob tmp-Parquet Zeilen enthält
+      - name: Check for new features
+        id: checknew
+        run: |
+          python3 - << 'EOF'
+import pandas as pd, sys
+df = pd.read_parquet("features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet")
+sys.exit(0 if len(df) > 0 else 1)
+EOF
+        continue-on-error: true
+
+      # 2) Nur bei neuen Zeilen: Append + altes löschen
+      - name: Append tmp to existing Parquet
+        if: steps.checknew.conclusion == 'success'
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
           NE=${{ steps.resume.outputs.end }}
-          DIR=features/aggTrades/${SYMBOL}
+          DIR=features/aggTrades/$SYMBOL
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          mkdir -p "$DIR"
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
+          python3 append_aggtrades.py \
+            "$OLD" \
+            "features/aggTrades/${SYMBOL}/tmp_${SYMBOL}.parquet" \
+            "$OUT"
+          rm "$OLD"
 
-          if [[ -n "$OLD" ]]; then
-            python3 append_aggtrades.py \
-              "$OLD" \
-              "$DIR/tmp_${SYMBOL}.parquet" \
-              "$OUT"
-            rm "$OLD"
-          else
-            mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
-          fi
-
-      - name: Cleanup tmp & raw CSVs
-        if: always()
+      # 3) Wenn keine neuen Zeilen: tmp löschen und Job beenden
+      - name: Skip—no new features
+        if: steps.checknew.conclusion == 'failure'
         run: |
-          rm -rf data/aggTrades/${{ matrix.symbol }}
-          rm -f features/aggTrades/${{ matrix.symbol }}/tmp_*.parquet
+          echo "✔️ No new aggTrades features for ${{ matrix.symbol }}, skipping."
+          rm features/aggTrades/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
+          exit 0
+
+      - name: Cleanup raw CSVs
+        if: always()
+        run: rm -rf data/aggTrades/${{ matrix.symbol }}
 
       - name: Commit & Push merged Parquet
+        if: steps.checknew.conclusion == 'success'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
           git add features/aggTrades/${{ matrix.symbol }}
-          if git diff --cached --quiet; then
-            echo "✔️ No new features to push"
-          else
-            git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${GS}→${NE}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-          fi
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
