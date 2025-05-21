@@ -110,15 +110,14 @@ jobs:
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
 
           if [[ -n "$OLD" ]]; then
-            python3 <<-'PYCODE'
-import pandas as pd
-import os, sys
-
+            # Hier rufen wir Python inline auf, ganz ohne YAML-Heredoc-Probleme:
+            OLD="$OLD" DIR="$DIR" SYMBOL="$SYMBOL" OUT="$OUT" python3 - << 'EOF'
+import pandas as pd, os
 old = pd.read_parquet(os.environ['OLD'])
-new = pd.read_parquet(os.environ['DIR'] + '/tmp_' + os.environ['SYMBOL'] + '.parquet')
+new = pd.read_parquet(os.path.join(os.environ['DIR'], f"tmp_{os.environ['SYMBOL']}.parquet"))
 df = pd.concat([old, new]).sort_index()
 df.to_parquet(os.environ['OUT'], compression='snappy')
-PYCODE
+EOF
             rm "$OLD"
           else
             mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
