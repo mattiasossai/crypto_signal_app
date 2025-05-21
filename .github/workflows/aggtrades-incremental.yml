@@ -111,14 +111,14 @@ jobs:
 
           if [[ -n "$OLD" ]]; then
             python3 <<-'PYCODE'
-            import pandas as pd
-            import os, sys
+import pandas as pd
+import os, sys
 
-            old = pd.read_parquet(os.environ['OLD'])
-            new = pd.read_parquet(os.environ['DIR'] + '/tmp_' + os.environ['SYMBOL'] + '.parquet')
-            df = pd.concat([old, new]).sort_index()
-            df.to_parquet(os.environ['OUT'], compression='snappy')
-            PYCODE
+old = pd.read_parquet(os.environ['OLD'])
+new = pd.read_parquet(os.environ['DIR'] + '/tmp_' + os.environ['SYMBOL'] + '.parquet')
+df = pd.concat([old, new]).sort_index()
+df.to_parquet(os.environ['OUT'], compression='snappy')
+PYCODE
             rm "$OLD"
           else
             mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
