@@ -126,5 +126,5 @@ jobs:
             echo "✔️ No changes"
           else
             git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}/@github.com/${{ github.repository }} HEAD:main
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           fi
