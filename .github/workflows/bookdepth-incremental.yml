@@ -6,10 +6,10 @@ on:
     inputs:
       start_date:
         description: 'Startdatum (YYYY-MM-DD)'
-        required: false
+        required: true
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
-        required: false
+        required: true
   schedule:
     - cron: '40 8 * * *'  # täglich 08:40 UTC
 
@@ -23,10 +23,14 @@ jobs:
       max-parallel: 1
 
     steps:
-      - name: Checkout
+      - name: Checkout & sync
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
+
+      - name: Pull latest main
+        run: git pull --rebase origin main
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -36,15 +40,13 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow scipy
 
-      - name: Make scripts executable
-        run: |
-          chmod +x extract_bookDepth_features.py
-          chmod +x scripts/append_bookdepth.py
+      - name: Make extractor script executable
+        run: chmod +x extract_bookDepth_features.py
 
       - name: Calc dates
         id: dates
         run: |
-          echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
+          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -53,11 +55,16 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/bookDepth/${SYMBOL}
           mkdir -p "$DIR"
-          OLD=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          # letztes historisches Parquet
+          OLD=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null \
+                   | sort | tail -n1 || true)
           if [[ -n "$OLD" ]]; then
-            PREV_END=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            START=$(date -I -d "$PREV_END +1 day")
+            # append mode: Start = Ende_OLD + 1 Tag
+            END_OLD=$(basename "$OLD" .parquet \
+                     | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            START=$(date -I -d "$END_OLD + 1 day")
           else
+            # fresh mode
             START=${{ steps.dates.outputs.global_start }}
           fi
           echo "start=$START" >> $GITHUB_OUTPUT
@@ -69,75 +76,55 @@ jobs:
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
 
-          # optional: Inception-Logik, aber kein Overlap
+          # Inception-Datum je Symbol
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
-            XRPUSDT)                         INC="2023-01-06";;
-            ENAUSDT)                         INC="2024-04-02";;
-            *)                               INC="$SD";;
+            XRPUSDT) INC="2023-01-06";;
+            ENAUSDT) INC="2024-04-02";;
+            *) INC=$SD;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
 
-          RAWDIR=raw/bookDepth/$SYMBOL
-          mkdir -p "$RAWDIR"
+          echo "→ Downloading bookDepth from $SD to $ED"
+          mkdir -p raw/bookDepth/"$SYMBOL"
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
-            if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$RAWDIR"
+            if curl -sSf \
+               "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" \
+               -o "$ZIP"; then
+              unzip -q -o "$ZIP" -d raw/bookDepth/"$SYMBOL"
             fi
             rm -f "$ZIP"
-            CUR=$(date -I -d "$CUR +1 day")
+            CUR=$(date -I -d "$CUR + 1 day")
           done
 
-      - name: Extract new days into tmp parquet
-        run: |
-          SYMBOL=${{ matrix.symbol }}
-          TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
-          mkdir -p features/bookDepth/${SYMBOL}
-          python3 extract_bookDepth_features.py \
-            --input-dir raw/bookDepth/${SYMBOL} \
-            --start-date "${{ steps.resume.outputs.start }}" \
-            --end-date   "${{ steps.resume.outputs.end }}" \
-            --output-file "$TMP"
-
-      - name: Append tmp to existing Parquet (or create fresh)
+      - name: Extract & merge into final Parquet
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
-          NE=${{ steps.resume.outputs.end }}
-          DIR=features/bookDepth/${SYMBOL}
-          OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
+          START=${{ steps.resume.outputs.start }}
+          END=${{ steps.resume.outputs.end }}
+          OUT=features/bookDepth/${SYMBOL}/${SYMBOL}-features-${GS}_to_${END}.parquet
+          mkdir -p "$(dirname "$OUT")"
+          ./extract_bookDepth_features.py \
+            --input-dir raw/bookDepth/${SYMBOL} \
+            --start-date "$START" \
+            --end-date   "$END" \
+            --output-file "$OUT"
 
-          if [[ -n "$OLD" ]]; then
-            python3 scripts/append_bookdepth.py \
-              "$OLD" \
-              "$DIR/tmp_${SYMBOL}.parquet" \
-              "$OUT"
-            rm "$OLD"
-            # tmp-file nach Merge entfernen
-            rm "$DIR/tmp_${SYMBOL}.parquet"
-          else
-            mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
-          fi
-
-      - name: Cleanup raw & tmp
+      - name: Cleanup raw
         if: always()
-        run: |
-          rm -rf raw/bookDepth/${{ matrix.symbol }}
-          rm -f features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
+        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
 
-      - name: Commit & Push merged Parquet
+      - name: Commit & Push BookDepth
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Immer erst Rebase, sonst non-fast-forward:
-          git pull --rebase origin main
           git add features/bookDepth/${{ matrix.symbol }}
           if git diff --cached --quiet; then
             echo "✔️ No changes"
           else
-            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${GS}→${NE}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}/@github.com/${{ github.repository }} HEAD:main
           fi
