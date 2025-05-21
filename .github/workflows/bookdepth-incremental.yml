@@ -11,7 +11,7 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: true
   schedule:
-    - cron: '40 8 * * *'  # täglich 08:40 UTC
+    - cron: '40 8 * * *'
 
 jobs:
   download-and-feature:
@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow scipy
 
-      - name: Make extractor & append scripts executable
+      - name: Make scripts executable
         run: |
           chmod +x extract_bookDepth_features.py
           chmod +x scripts/append_bookdepth.py
@@ -72,6 +72,7 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
+          # Inception logic
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                          INC="2023-01-06";;
@@ -104,7 +105,12 @@ jobs:
         id: checknew
         run: |
           TMP="features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
-          if [[ -f "$TMP" ]] && [[ $(python3 -c "import pandas as pd; print(len(pd.read_parquet('$TMP'))>0)") == "True" ]]; then
+          if [[ -f "$TMP" ]] && python3 - << 'PYCODE'
+import pandas as pd, sys
+df = pd.read_parquet(sys.argv[1])
+sys.exit(0 if len(df) > 0 else 1)
+PYCODE
+          then
             exit 0
           else
             exit 1
