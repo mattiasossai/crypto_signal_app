@@ -76,7 +76,7 @@ jobs:
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
             ENAUSDT)                           INC="2024-04-02";;
-            *)                                 INC=$SD ;;
+            *)                                 INC=$SD;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
           mkdir -p raw/bookDepth/$SYMBOL
@@ -102,16 +102,18 @@ jobs:
 
       - name: Check for new features
         id: checknew
+        env:
+          TMP: features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         run: |
+          echo "→ Checking if $TMP has rows…"
           python3 - << 'EOF'
 import pandas as pd, sys, os
-tmp = sys.argv[1]
-if os.path.exists(tmp) and len(pd.read_parquet(tmp))>0:
+tmp = os.environ['TMP']
+if os.path.exists(tmp) and len(pd.read_parquet(tmp)) > 0:
     sys.exit(0)
 else:
     sys.exit(1)
 EOF
-        args: features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         continue-on-error: true
 
       - name: Append tmp to existing Parquet
@@ -125,7 +127,7 @@ EOF
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1)
           python3 scripts/append_bookdepth.py \
             "$OLD" \
-            "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
+            "$TMP" \
             "$OUT"
           rm "$OLD"
 
