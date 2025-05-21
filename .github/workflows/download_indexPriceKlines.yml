@@ -3,8 +3,7 @@ name: 2️⃣📂 Download & Commit indexPriceKlines (1h & 4h)
 on:
   workflow_dispatch:
   schedule:
-    # täglich 08:00 UTC
-    - cron: '10 8 * * *'
+    - cron: '10 8 * * *'  # täglich 08:10 UTC
 
 jobs:
   download:
@@ -19,44 +18,46 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Install unzip & curl
+      - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
       - name: Determine yesterday
         id: dates
-        run: echo "END=$(date -I -d 'yesterday')" >> $GITHUB_ENV
+        run: |
+          YESTERDAY=$(date -I -d 'yesterday')
+          echo "end=$YESTERDAY" >> $GITHUB_OUTPUT
 
       - name: Download & extract yesterday’s indexPriceKlines
         shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          DATE=$END
+          DATE=${{ steps.dates.outputs.end }}
+          BASE="raw/indexKlines/${SYMBOL}"
+          mkdir -p "$BASE"
+
           for iv in 1h 4h; do
-            BASE="data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}"
-            mkdir -p "$BASE"
             ZIP="${SYMBOL}-${iv}-${DATE}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
-            echo "→ Fetching $ZIP"
+            echo "→ Fetching $URL"
             if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > "$BASE/${ZIP%.zip}.csv"
+              unzip -p tmp.zip > "${BASE}/${ZIP%.zip}.csv"
               rm tmp.zip
             else
-              rm -f tmp.zip || true
+              echo "⚠️ Missing $ZIP – skipping"
+              rm -f tmp.zip
             fi
           done
 
       - name: Upload yesterday’s indexPriceKlines only
         uses: actions/upload-artifact@v4
         with:
-          name: data-indexPriceKlines-${{ matrix.symbol }}
-          path: |
-            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/1h/${{ matrix.symbol }}-1h-${{ env.END }}.csv
-            data/futures/um/daily/indexPriceKlines/${{ matrix.symbol }}/4h/${{ matrix.symbol }}-4h-${{ env.END }}.csv
+          name: indexPriceKlines-${{ matrix.symbol }}
+          path: raw/indexKlines/${{ matrix.symbol }}/*-${{ steps.dates.outputs.end }}.csv
           if-no-files-found: ignore
 
   aggregate_and_push:
-    name: Aggregate & Commit indexPriceKlines Data
+    name: 🚚 Merge & Commit indexPriceKlines
     needs: download
     runs-on: ubuntu-latest
 
@@ -67,41 +68,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Download all indexPriceKlines artifacts
+      - name: Cleanup legacy folders
+        run: rm -rf raw/indexKlines/historical-*
+
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: data-artifacts
+          path: artifacts
 
-      - name: Merge indexPriceKlines into historical_tech
+      - name: Merge CSVs into raw/indexKlines
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="historical_tech/indexPriceKlines/data-artifacts"
-          mkdir -p "$ROOT"
-
-          # verschiebe jede CSV einzeln, so gibt's keine "Directory not empty"-Konflikte
-          find data-artifacts -type f -name '*.csv' | while read src; do
-            # src = data-artifacts/data-indexPriceKlines-<SYMBOL>/<iv>/<file>.csv
-            symbol_dir=$(basename "$(dirname "$(dirname "$src")")")   # data-indexPriceKlines-<SYMBOL>
-            interval=$(basename "$(dirname "$src")")                 # 1h oder 4h
-            file=$(basename "$src")
-            dst="$ROOT/${symbol_dir}/${interval}/${file}"
-            mkdir -p "$(dirname "$dst")"
-            mv "$src" "$dst"
-            echo " ➕ $dst"
+          # für jede CSV im Artifact
+          find artifacts -type f -name '*.csv' | while read SRC; do
+            SYMBOL=$(basename "$(dirname "$SRC")")  # artifacts/<symbol>/<file>.csv
+            DST="raw/indexKlines/${SYMBOL}/$(basename "$SRC")"
+            mkdir -p "$(dirname "$DST")"
+            mv "$SRC" "$DST"
+            echo " ➕ $DST"
           done
 
-      - name: Commit & Push indexPriceKlines
+      - name: Commit & Push
         shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --mixed origin/main
-          git add historical_tech/indexPriceKlines/data-artifacts
+          git add raw/indexKlines
           if git diff --cached --quiet; then
             echo "✅ No new indexPriceKlines to commit"
           else
-            git commit -m "chore(data): import indexPriceKlines ${END} [skip ci]"
+            git commit -m "chore(history): import indexPriceKlines ${{ steps.dates.outputs.end }} [skip ci]"
             git push origin HEAD:main
           fi
