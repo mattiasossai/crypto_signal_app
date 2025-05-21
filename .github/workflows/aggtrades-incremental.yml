@@ -96,7 +96,7 @@ jobs:
           mkdir -p features/aggTrades/${{ matrix.symbol }}
           OUT="features/aggTrades/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
           python3 extract_aggTrades_features.py \
-            --in-dir      raw/aggTrades/${{ matrix.symbol }} \
+            --in-dir      data/aggTrades/${{ matrix.symbol }} \
             --start-date  "${{ steps.resume.outputs.start }}" \
             --end-date    "${{ steps.resume.outputs.end }}" \
             --out-dir     features/aggTrades \
