@@ -13,35 +13,35 @@ jobs:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
       max-parallel: 6
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Install tools
+      - name: Install unzip & curl
         run: sudo apt-get update && sudo apt-get install -y unzip curl
 
       - name: Determine yesterday
         id: dates
         run: |
-          YESTERDAY=$(date -I -d 'yesterday')
-          echo "end=$YESTERDAY" >> $GITHUB_OUTPUT
+          echo "END=$(date -I -d 'yesterday')" >> $GITHUB_ENV
 
       - name: Download & extract yesterday’s indexPriceKlines
-        shell: bash
         run: |
           set -euo pipefail
           SYMBOL=${{ matrix.symbol }}
-          DATE=${{ steps.dates.outputs.end }}
-          BASE="raw/indexKlines/${SYMBOL}"
-          mkdir -p "$BASE"
+          DATE=$END
 
           for iv in 1h 4h; do
             ZIP="${SYMBOL}-${iv}-${DATE}.zip"
             URL="https://data.binance.vision/data/futures/um/daily/indexPriceKlines/${SYMBOL}/${iv}/${ZIP}"
-            echo "→ Fetching $URL"
+
+            # zielt auf <repo>/raw/indexKlines/<SYMBOL>/
+            OUTDIR="raw/indexKlines/${SYMBOL}"
+            mkdir -p "$OUTDIR"
+
+            echo "→ Fetching $ZIP"
             if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > "${BASE}/${ZIP%.zip}.csv"
+              unzip -p tmp.zip > "$OUTDIR/${SYMBOL}-${iv}-${DATE}.csv"
               rm tmp.zip
             else
               echo "⚠️ Missing $ZIP – skipping"
@@ -53,14 +53,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: indexPriceKlines-${{ matrix.symbol }}
-          path: raw/indexKlines/${{ matrix.symbol }}/*-${{ steps.dates.outputs.end }}.csv
+          path: |
+            raw/indexKlines/${{ matrix.symbol }}/${{ matrix.symbol }}-1h-${{ env.END }}.csv
+            raw/indexKlines/${{ matrix.symbol }}/${{ matrix.symbol }}-4h-${{ env.END }}.csv
           if-no-files-found: ignore
 
   aggregate_and_push:
-    name: 🚚 Merge & Commit indexPriceKlines
+    name: ↪️ Merge & Commit indexPriceKlines
     needs: download
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout fresh
         uses: actions/checkout@v3
@@ -68,36 +69,38 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Cleanup legacy folders
-        run: rm -rf raw/indexKlines/historical-*
+      - name: Cleanup old indexPriceKlines-* dirs
+        run: rm -rf raw/indexKlines/indexPriceKlines-* || true
 
-      - name: Download all artifacts
+      - name: Download all indexPriceKlines artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: data-artifacts
 
-      - name: Merge CSVs into raw/indexKlines
-        shell: bash
+      - name: Merge artifacts into raw/indexKlines/<SYMBOL>
         run: |
           set -euo pipefail
-          # für jede CSV im Artifact
-          find artifacts -type f -name '*.csv' | while read SRC; do
-            SYMBOL=$(basename "$(dirname "$SRC")")  # artifacts/<symbol>/<file>.csv
-            DST="raw/indexKlines/${SYMBOL}/$(basename "$SRC")"
+          find data-artifacts -type f -name '*.csv' | while read SRC; do
+            # SRC = data-artifacts/indexPriceKlines-<SYMBOL>/<iv>/<file>.csv
+            # wir wollen in raw/indexKlines/<SYMBOL>/<file>.csv
+            BASENAME=$(basename "$SRC")
+            SYMBOL=$(echo "$BASENAME" | cut -d- -f1)
+            DST="raw/indexKlines/${SYMBOL}/${BASENAME}"
             mkdir -p "$(dirname "$DST")"
             mv "$SRC" "$DST"
             echo " ➕ $DST"
           done
 
       - name: Commit & Push
-        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --mixed origin/main
           git add raw/indexKlines
-          if git diff --cached --quiet; then
-            echo "✅ No new indexPriceKlines to commit"
-          else
-            git commit -m "chore(history): import indexPriceKlines ${{ steps.dates.outputs.end }} [skip ci]"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(history): import indexPriceKlines ${END} [skip ci]"
             git push origin HEAD:main
+          else
+            echo "✅ No new indexPriceKlines to push"
           fi
