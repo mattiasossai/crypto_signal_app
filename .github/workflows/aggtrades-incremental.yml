@@ -39,9 +39,7 @@ jobs:
       - name: Calc dates
         id: dates
         run: |
-          # global_start nur eine Konstante, siehe INCEPTION in deinem Script
           echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
-          # heute = gestern für den Increment
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -50,7 +48,6 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/aggTrades/${SYMBOL}
           mkdir -p "$DIR"
-          # finde letztes Parquet
           LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$LAST" ]]; then
             PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
@@ -61,19 +58,18 @@ jobs:
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
-      - name: Download & extract aggTrades (1-Day overlap)
+      - name: Download & extract aggTrades (1-day overlap)
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC="2019-12-31";;
             XRPUSDT)         INC="2020-01-06";;
             BNBUSDT)         INC="2020-02-10";;
             SOLUSDT)         INC="2020-09-14";;
             ENAUSDT)         INC="2024-04-02";;
-            *)               INC=$SD;;
+            *)               INC=$SD ;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
           echo "→ Downloading aggTrades from $SD to $ED (1-day overlap)"
@@ -104,26 +100,27 @@ jobs:
             --output-file "$TMP"
 
       - name: Append tmp to the existing Parquet (or create fresh)
+        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
           NE=${{ steps.resume.outputs.end }}
           DIR=features/aggTrades/${SYMBOL}
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-
-          # letztes bestehendes Parquet (mit altem End)
+          mkdir -p "$DIR"
           OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
 
           if [[ -n "$OLD" ]]; then
-            python3 - << 'EOF'
-import pandas as pd
-import os
+            # Hier beginnt das Heredoc – exakt so eingerückt:
+            python3 <<-'PYCODE'
+            	import pandas as pd
+            	import os, sys
 
-old = pd.read_parquet("$OLD")
-new = pd.read_parquet("$DIR/tmp_${SYMBOL}.parquet")
-df = pd.concat([old, new]).sort_index()
-df.to_parquet("$OUT", compression="snappy")
-EOF
+            	old = pd.read_parquet(os.environ['OLD'])
+            	new = pd.read_parquet(os.environ['DIR'] + '/tmp_' + os.environ['SYMBOL'] + '.parquet')
+            	df = pd.concat([old, new]).sort_index()
+            	df.to_parquet(os.environ['OUT'], compression='snappy')
+            PYCODE
             rm "$OLD"
           else
             mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
