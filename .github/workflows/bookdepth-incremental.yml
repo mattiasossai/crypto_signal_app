@@ -38,7 +38,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install --upgrade pandas pyarrow scipy
+        run: |
+          pip install --upgrade pandas pyarrow scipy
 
       - name: Make extractor script executable
         run: chmod +x extract_bookDepth_features.py
@@ -53,12 +54,12 @@ jobs:
         id: resume
         run: |
           SYMBOL=${{ matrix.symbol }}
-          DIR=features/bookDepth/$SYMBOL
+          DIR=features/bookDepth/${SYMBOL}
           mkdir -p "$DIR"
-          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$LAST" ]]; then
-            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
-            START=$(date -I -d "$PREV_END + 1 day")
+          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$OLD" ]]; then
+            END_OLD=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
+            START=$(date -I -d "$END_OLD + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
           fi
@@ -70,40 +71,61 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
+          # Inception logic
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
             ENAUSDT)                           INC="2024-04-02";;
-            *)                                 INC=$SD;;
+            *)                                 INC=$SD ;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
-          mkdir -p raw/bookDepth/$SYMBOL
+          mkdir -p raw/bookDepth/${SYMBOL}
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d raw/bookDepth/$SYMBOL
+              unzip -q -o "$ZIP" -d raw/bookDepth/${SYMBOL}
             fi
             rm -f "$ZIP"
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Extract & Append via Script
+      - name: Extract **only** the new range into tmp
+        run: |
+          SYMBOL=${{ matrix.symbol }}
+          TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
+          python3 extract_bookDepth_features.py \
+            --input-dir raw/bookDepth/${SYMBOL} \
+            --start-date "${{ steps.resume.outputs.start }}" \
+            --end-date   "${{ steps.resume.outputs.end }}" \
+            --output-file "$TMP"
+
+      - name: Append & Cleanup
         run: |
           SYMBOL=${{ matrix.symbol }}
           GS=${{ steps.dates.outputs.global_start }}
           NE=${{ steps.resume.outputs.end }}
-          OUT="features/bookDepth/${SYMBOL}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          mkdir -p "$(dirname "$OUT")"
-          python3 extract_bookDepth_features.py \
-            --input-dir raw/bookDepth/${SYMBOL} \
-            --start-date "$START" \
-            --end-date   "$NE" \
-            --output-file "$OUT"
+          DIR=features/bookDepth/${SYMBOL}
+          OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
+          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
 
-      - name: Cleanup raw data
-        if: always()
-        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
+          if [[ -n "$OLD" ]]; then
+            # Merge old + new tmp
+            python3 - << 'PYCODE'
+import pandas as pd, sys
+old = pd.read_parquet(sys.argv[1])
+new = pd.read_parquet(sys.argv[2])
+pd.concat([old,new]).sort_index().to_parquet(sys.argv[3], compression="snappy")
+PYCODE
+            rm "$OLD"
+          else
+            mv "$DIR/tmp_${SYMBOL}.parquet" "$OUT"
+          fi
+
+      - name: Cleanup raw data & tmp
+        run: |
+          rm -rf raw/bookDepth/${{ matrix.symbol }}
+          rm -f features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
 
       - name: Commit & Push BookDepth
         run: |
@@ -111,7 +133,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add features/bookDepth/${{ matrix.symbol }}
           if git diff --cached --quiet; then
-            echo "✔️ No changes to BookDepth features for ${{ matrix.symbol }}"
+            echo "✔️ No changes"
           else
             git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }}→${{ steps.resume.outputs.end }}"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
