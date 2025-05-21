@@ -101,7 +101,7 @@ jobs:
           mkdir -p features/bookDepth/${{ matrix.symbol }}
           OUT="features/bookDepth/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
           python3 extract_bookDepth_features.py \
-            --in-dir      raw/bookDepth/${{ matrix.symbol }} \
+            --in-dir      data/bookDepth/${{ matrix.symbol }} \
             --start-date  "${{ steps.dates.outputs.global_start }}" \
             --end-date    "${{ steps.resume.outputs.end }}" \
             --out-dir     features/bookDepth \
