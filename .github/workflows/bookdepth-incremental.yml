@@ -5,10 +5,10 @@ on:
     inputs:
       start_date:
         description: 'Startdatum (YYYY-MM-DD)'
-        required: false
+        required: true
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
-        required: false
+        required: true
   schedule:
     - cron: '40 8 * * *'  # täglich 08:40 UTC
 
@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -45,9 +46,7 @@ jobs:
       - name: Calc dates
         id: dates
         run: |
-          # Konstantes Global-Start
           echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
-          # Endpunkt = gestern
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -56,11 +55,10 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/bookDepth/${SYMBOL}
           mkdir -p "$DIR"
-          # letztes bestehendes Parquet finden
-          LAST=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$LAST" ]]; then
-            PREV_END=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            START=$(date -I -d "$PREV_END +1 day")
+          OLD=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$OLD" ]]; then
+            END_OLD=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            START=$(date -I -d "$END_OLD + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
           fi
@@ -68,12 +66,10 @@ jobs:
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
       - name: Download & unzip bookDepth
-        shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
@@ -81,69 +77,44 @@ jobs:
             *)                                 INC=$SD ;;
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
-          echo "→ Downloading bookDepth from $SD to $ED"
-          RAW=raw/bookDepth/${SYMBOL}
-          mkdir -p "$RAW"
+          mkdir -p raw/bookDepth/"$SYMBOL"
           CUR="$SD"
           while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
             ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
-            echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$RAW"
+              unzip -q -o "$ZIP" -d raw/bookDepth/"$SYMBOL"
               rm -f "$ZIP"
             else
-              echo "⚠️ Missing $ZIP – skipping"
               rm -f "$ZIP"
             fi
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Extract **only** the new days into tmp Parquet
+      - name: Extract & Append via Skript
         run: |
           SYMBOL=${{ matrix.symbol }}
-          TMP="features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
+          START=${{ steps.resume.outputs.start }}
+          END=${{ steps.resume.outputs.end }}
+          DIR=features/bookDepth/${SYMBOL}
+          OUT="${DIR}/${SYMBOL}-features-${START}_to_${END}.parquet"
+          mkdir -p "$DIR"
+          # unser extractor übernimmt intern resume/append logic
           python3 extract_bookDepth_features.py \
             --input-dir raw/bookDepth/${SYMBOL} \
-            --start-date "${{ steps.resume.outputs.start }}" \
-            --end-date   "${{ steps.resume.outputs.end }}" \
-            --output-file "$TMP"
+            --start-date "$START" \
+            --end-date   "$END" \
+            --output-file "$OUT"
 
-      - name: Append tmp to existing Parquet (or create fresh)
-        run: |
-          SYMBOL=${{ matrix.symbol }}
-          GS=${{ steps.dates.outputs.global_start }}
-          NE=${{ steps.resume.outputs.end }}
-          DIR=features/bookDepth/${SYMBOL}
-          OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
-          mkdir -p "$DIR"
-          OLD=$(ls $DIR/${SYMBOL}-features-${GS}_to_*.parquet 2>/dev/null | sort | tail -n1 || true)
-
-          if [[ -n "$OLD" ]]; then
-            # Append
-            python3 scripts/append_bookdepth.py \
-              "$OLD" \
-              "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" \
-              "$OUT"
-            # altes und tmp aufräumen
-            rm "$OLD"
-            rm "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet"
-          else
-            # Erstes File
-            mv "features/bookDepth/${SYMBOL}/tmp_${SYMBOL}.parquet" "$OUT"
-          fi
-
-      - name: Cleanup raw data
+      - name: Cleanup tmp raw data
         if: always()
-        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
+        run: |
+          rm -rf raw/bookDepth/${{ matrix.symbol }}
 
-      - name: Commit & Push features
+      - name: Commit & Push BookDepth
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
           git add features/bookDepth/${{ matrix.symbol }}
-          if git diff --cached --quiet; then
-            echo "✔️ No new bookDepth features to push"
-          else
-            git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${GS}→${NE}"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-          fi
+          git commit -m "♻️ ${{ matrix.symbol }} bookDepth-Features ${{ steps.dates.outputs.global_start }} to ${{ steps.resume.outputs.end }}" || echo "✔️ No changes"
+          git push origin HEAD:main 
