@@ -44,7 +44,7 @@ jobs:
         id: resume
         run: |
           SYMBOL=${{ matrix.symbol }}
-          DIR=features/aggTrades
+          DIR=features/aggTrades/${{ matrix.symbol }}
           old=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
           if [[ -n "$old" ]]; then
             old_end=$(basename "$old" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
@@ -93,7 +93,7 @@ jobs:
 
       - name: Feature extraction & append
         run: |
-          mkdir -p features/aggTrades
+          mkdir -p features/aggTrades/${{ matrix.symbol }}
           OUT="features/aggTrades/${{ matrix.symbol }}-features-${{ steps.dates.outputs.global_start }}_to_${{ steps.resume.outputs.end }}.parquet"
           python3 extract_aggTrades_features.py \
             --in-dir      raw/aggTrades/${{ matrix.symbol }} \
