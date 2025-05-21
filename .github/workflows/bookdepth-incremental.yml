@@ -110,12 +110,14 @@ jobs:
           OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
 
           if [[ -n "$OLD" ]]; then
-            # Merge old + new tmp
+            # Merge alt + tmp in einem einzigen Python-Block:
             python3 - << 'PYCODE'
-import pandas as pd, sys
+import sys
+import pandas as pd
+
 old = pd.read_parquet(sys.argv[1])
 new = pd.read_parquet(sys.argv[2])
-pd.concat([old,new]).sort_index().to_parquet(sys.argv[3], compression="snappy")
+pd.concat([old, new]).sort_index().to_parquet(sys.argv[3], compression="snappy")
 PYCODE
             rm "$OLD"
           else
