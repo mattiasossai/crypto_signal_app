@@ -3,7 +3,8 @@ name: 1️⃣🕯️ Download & Commit Historical Klines
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *'  # täglich 08:00 UTC
+    # täglich 08:00 UTC
+    - cron: '0 8 * * *'
 
 jobs:
   download_matrix:
@@ -12,9 +13,8 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-        interval: [1m, 5m, 15m, 1h, 4h]
+        interval: [1m,5m,15m,1h,4h]
       max-parallel: 30
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -27,7 +27,6 @@ jobs:
         shell: bash
         run: |
           YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
-
           # existiert schon eine CSV für gestern?
           if [[ -f raw/klines/${{ matrix.symbol }}/${{ matrix.symbol }}-${{ matrix.interval }}-$YESTERDAY.csv ]]; then
             START=$YESTERDAY
@@ -42,10 +41,7 @@ jobs:
               START=$(date -I -d "$LAST +1 day")
             fi
           fi
-
           END=$YESTERDAY
-
-          # neuer Standard: schreibe Outputs via GITHUB_OUTPUT
           echo "start=$START" >> $GITHUB_OUTPUT
           echo "end=$END"     >> $GITHUB_OUTPUT
 
@@ -65,10 +61,9 @@ jobs:
             ZIP="${SYMBOL}-${INTERVAL}-${CUR}.zip"
             OUT="raw/klines/${SYMBOL}/${SYMBOL}-${INTERVAL}-${CUR}.csv"
             if [[ -f "$OUT" ]]; then
-              echo "✔️  Skip existing $OUT"
+              echo "✔️ Skip existing $OUT"
             else
               URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${ZIP}"
-              echo "→ Fetching $ZIP"
               if curl -sSf "$URL" | funzip > "$OUT"; then
                 echo " ✅ Saved $OUT"
               else
@@ -79,10 +74,11 @@ jobs:
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Upload artifact for yesterday
+      - name: Upload just yesterday’s CSV as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: historical-${{ matrix.symbol }}-${{ matrix.interval }}
+          # Einfache Namensgebung ohne Interval
+          name: klines-${{ matrix.symbol }}
           path: raw/klines/${{ matrix.symbol }}/*-${{ steps.dates.outputs.end }}.csv
           if-no-files-found: ignore
 
@@ -90,7 +86,6 @@ jobs:
     name: Aggregate & Push All Historical
     needs: download_matrix
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout fresh
         uses: actions/checkout@v3
@@ -98,28 +93,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Cleanup legacy historical-* dirs
-        run: rm -rf raw/klines/historical-*   # entfernt alle historical-… Ordner
+      - name: Cleanup legacy dirs
+        run: |
+          rm -rf raw/klines/historical-*   # alte Struktur entfernen
 
-      - name: Download all historical-artifacts
+      - name: Download all klines Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./historical-artifacts
+          # lädt alle Artifacts ohne extra Subfolder
+          path: ./artifacts
 
-      - name: Merge new CSVs into raw/klines
+      - name: Merge new CSVs into raw/klines/<SYMBOL>
         shell: bash
         run: |
           mkdir -p raw/klines
-          find historical-artifacts -type f | while read SRC; do
-            SYMBOL=$(basename $(dirname "$SRC"))
-            DST="raw/klines/${SYMBOL}/$(basename "$SRC")"
+          # artifacts/klines-<SYMBOL>/*.csv
+          find artifacts -type f -name '*.csv' | while read SRC; do
+            # Extrahiere SYMBOL aus Filename: BTCUSDT-1h-2025-05-20.csv
+            F=$(basename "$SRC")
+            SYMBOL=${F%%-*}
+            DST="raw/klines/${SYMBOL}/${F}"
             mkdir -p "$(dirname "$DST")"
             mv "$SRC" "$DST"
             echo " ➕ $DST"
           done
 
       - name: Commit & Push
-        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -127,7 +126,7 @@ jobs:
           git reset --mixed origin/main
           git add raw/klines
           if ! git diff --cached --quiet; then
-            git commit -m "chore(history): import ${END} [skip ci]"
+            git commit -m "chore(history): import klines ${END} [skip ci]"
             git push origin HEAD:main
           else
             echo "✔️ No new Klines to push"
