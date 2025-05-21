@@ -12,9 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-        interval: [1m,5m,15m,1h,4h]
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+        interval: [1m, 5m, 15m, 1h, 4h]
       max-parallel: 30
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -22,48 +23,45 @@ jobs:
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: Determine date range
+      - name: Determine Backfill Date Range
         id: dates
         shell: bash
         run: |
           YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
-          # existiert schon eine CSV für gestern?
-          if [[ -f raw/klines/${{ matrix.symbol }}/${{ matrix.symbol }}-${{ matrix.interval }}-$YESTERDAY.csv ]]; then
-            START=$YESTERDAY
-          else
-            LAST=$(find raw/klines/${{ matrix.symbol }} -type f \
+          DIR="raw/klines/${{ matrix.symbol }}"
+          if compgen -G "$DIR/${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" > /dev/null; then
+            LAST=$(find "$DIR" -type f \
               -name "${{ matrix.symbol }}-${{ matrix.interval }}-*.csv" \
-              | sed -E "s/.*-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
+              | sed -E "s/.*${{ matrix.symbol }}-${{ matrix.interval }}-([0-9]{4}-[0-9]{2}-[0-9]{2})\.csv/\1/" \
               | sort | tail -n1)
-            if [[ -z "$LAST" ]]; then
-              START=$YESTERDAY
-            else
-              START=$(date -I -d "$LAST +1 day")
-            fi
+            START=$(date -d "$LAST +1 day" '+%Y-%m-%d')
+          else
+            START="$YESTERDAY"
           fi
-          END=$YESTERDAY
-          echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END"     >> $GITHUB_OUTPUT
+          END="$YESTERDAY"
+          echo "START=$START" >> $GITHUB_ENV
+          echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download Range
+      - name: Download History Range
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           INTERVAL=${{ matrix.interval }}
-          START=${{ steps.dates.outputs.start }}
-          END=${{ steps.dates.outputs.end }}
+          START=${{ env.START }}
+          END=${{ env.END }}
 
-          echo "→ Downloading ${SYMBOL}-${INTERVAL} from $START to $END"
-          mkdir -p raw/klines/$SYMBOL
+          # Zielverzeichnis in deiner neuen Struktur
+          TARGET="raw/klines/${SYMBOL}"
+          mkdir -p "$TARGET"
 
-          CUR="$START"
-          while [[ "$CUR" < "$END" || "$CUR" == "$END" ]]; do
-            ZIP="${SYMBOL}-${INTERVAL}-${CUR}.zip"
-            OUT="raw/klines/${SYMBOL}/${SYMBOL}-${INTERVAL}-${CUR}.csv"
-            if [[ -f "$OUT" ]]; then
-              echo "✔️ Skip existing $OUT"
+          cur="$START"
+          while [ "$(date -I -d "$cur")" != "$(date -I -d "$END + 1 day")" ]; do
+            OUT="${TARGET}/${SYMBOL}-${INTERVAL}-${cur}.csv"
+            if [ -f "$OUT" ]; then
+              echo "✔️ Skipping existing $OUT"
             else
-              URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${ZIP}"
+              echo "→ Downloading ${SYMBOL}-${INTERVAL}@${cur}"
+              URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${cur}.zip"
               if curl -sSf "$URL" | funzip > "$OUT"; then
                 echo " ✅ Saved $OUT"
               else
@@ -71,63 +69,20 @@ jobs:
                 rm -f "$OUT"
               fi
             fi
-            CUR=$(date -I -d "$CUR +1 day")
-          done
-
-      - name: Upload just yesterday’s CSV as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          # Einfache Namensgebung ohne Interval
-          name: klines-${{ matrix.symbol }}
-          path: raw/klines/${{ matrix.symbol }}/*-${{ steps.dates.outputs.end }}.csv
-          if-no-files-found: ignore
-
-  aggregate_and_push:
-    name: Aggregate & Push All Historical
-    needs: download_matrix
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout fresh
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Cleanup legacy dirs
-        run: |
-          rm -rf raw/klines/historical-*   # alte Struktur entfernen
-
-      - name: Download all klines Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          # lädt alle Artifacts ohne extra Subfolder
-          path: ./artifacts
-
-      - name: Merge new CSVs into raw/klines/<SYMBOL>
-        shell: bash
-        run: |
-          mkdir -p raw/klines
-          # artifacts/klines-<SYMBOL>/*.csv
-          find artifacts -type f -name '*.csv' | while read SRC; do
-            # Extrahiere SYMBOL aus Filename: BTCUSDT-1h-2025-05-20.csv
-            F=$(basename "$SRC")
-            SYMBOL=${F%%-*}
-            DST="raw/klines/${SYMBOL}/${F}"
-            mkdir -p "$(dirname "$DST")"
-            mv "$SRC" "$DST"
-            echo " ➕ $DST"
+            cur=$(date -I -d "$cur + 1 day")
           done
 
       - name: Commit & Push
+        shell: bash
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git reset --mixed origin/main
-          git add raw/klines
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(history): import klines ${END} [skip ci]"
-            git push origin HEAD:main
+          git add raw/klines/${{ matrix.symbol }}
+          if git diff --cached --quiet; then
+            echo "✔️ No new Klines to push for ${{ matrix.symbol }} @ ${{ matrix.interval }}"
           else
-            echo "✔️ No new Klines to push"
+            git commit -m "chore(history): import ${{ matrix.symbol }}-${{ matrix.interval }}-${{ env.END }} [skip ci]"
+            git push origin HEAD:main
           fi
