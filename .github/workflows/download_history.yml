@@ -1,3 +1,4 @@
+# .github/workflows/download_history_klines.yml
 name: "1️⃣🕯️ Download & Commit Historical Klines"
 
 on:
@@ -14,20 +15,15 @@ jobs:
         symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
         interval: [1m, 5m, 15m, 1h, 4h]
       max-parallel: 30
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          persist-credentials: true
 
       - name: Install unzip
         run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: Determine Backfill Date Range
+      - name: Determine date range
         id: dates
-        shell: bash
         run: |
           YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
           DIR="raw/klines/${{ matrix.symbol }}"
@@ -44,33 +40,67 @@ jobs:
           echo "START=$START" >> $GITHUB_ENV
           echo "END=$END"     >> $GITHUB_ENV
 
-      - name: Download History Range
-        shell: bash
+      - name: Download yesterday’s CSV
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          INTERVAL=${{ matrix.interval }}
-          START=${{ env.START }}
-          END=${{ env.END }}
+          SYMBOL="${{ matrix.symbol }}"
+          INTERVAL="${{ matrix.interval }}"
+          START="${{ env.START }}"
+          END="${{ env.END }}"
 
-          TARGET="raw/klines/${SYMBOL}"
+          TARGET="raw/klines/$SYMBOL"
           mkdir -p "$TARGET"
 
-          cur="$START"
-          while [ "$(date -I -d "$cur")" != "$(date -I -d "$END + 1 day")" ]; do
-            OUT="${TARGET}/${SYMBOL}-${INTERVAL}-${cur}.csv"
-            if [ -f "$OUT" ]; then
-              echo "✔️ Skipping existing $OUT"
+          OUT="$TARGET/${SYMBOL}-${INTERVAL}-${END}.csv"
+          if [[ -f "$OUT" ]]; then
+            echo "✔️  Exists $OUT – skipping"
+          else
+            echo "→ Fetching ${SYMBOL}-${INTERVAL}@${END}"
+            URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${END}.zip"
+            if curl -sSf "$URL" | funzip > "$OUT"; then
+              echo " ✅ Saved $OUT"
             else
-              echo "→ Downloading ${SYMBOL}-${INTERVAL}@${cur}"
-              URL="https://data.binance.vision/data/futures/um/daily/klines/${SYMBOL}/${INTERVAL}/${SYMBOL}-${INTERVAL}-${cur}.zip"
-              if curl -sSf "$URL" | funzip > "$OUT"; then
-                echo " ✅ Saved $OUT"
-              else
-                echo " ⚠️ Missing or error: $URL"
-                rm -f "$OUT"
-              fi
+              echo " ⚠️ Not found – $URL"
+              rm -f "$OUT"
             fi
-            cur=$(date -I -d "$cur + 1 day")
+          fi
+
+      - name: Upload artifact for ${{ matrix.symbol }}-${{ matrix.interval }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-${{ matrix.symbol }}-${{ matrix.interval }}
+          path: raw/klines/${{ matrix.symbol }}/*-${{ env.END }}.csv
+          if-no-files-found: ignore
+
+  aggregate_and_push:
+    name: Aggregate & Push All Historical
+    needs: download_matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fresh
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Cleanup legacy dirs
+        run: rm -rf raw/klines/*
+
+      - name: Download all historical-artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./historical-artifacts
+
+      - name: Merge new CSVs into raw/klines
+        shell: bash
+        run: |
+          mkdir -p raw/klines
+          find historical-artifacts -type f | while read SRC; do
+            # SRC = historical-artifacts/historical-${SYMBOL}-${INTERVAL}/${file}.csv
+            SYMBOL=$(basename "$(dirname "$SRC")" | sed 's/^historical-//')
+            DST="raw/klines/${SYMBOL}/$(basename "$SRC")"
+            mkdir -p "$(dirname "$DST")"
+            mv "$SRC" "$DST"
+            echo " ➕ $DST"
           done
 
       - name: Commit & Push
@@ -78,16 +108,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Ensure we're synced to latest main
-          git fetch origin main
-          git reset --mixed origin/main
-          
-          git add raw/klines/${{ matrix.symbol }}
+          git add raw/klines
           if git diff --cached --quiet; then
-            echo "✔️ No new Klines to push for ${{ matrix.symbol }} @ ${{ matrix.interval }}"
+            echo "✔️ No new Klines to push"
           else
-            git commit -m "chore(history): import ${{ matrix.symbol }}-${{ matrix.interval }}-${{ env.END }} [skip ci]"
-            git pull --rebase origin main
-            git push origin HEAD:main
+            git commit -m "chore(history): import $(date -I -d 'yesterday') [skip ci]"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           fi
