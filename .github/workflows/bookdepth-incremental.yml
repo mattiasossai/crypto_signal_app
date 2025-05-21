@@ -1,4 +1,3 @@
-# .github/workflows/bookdepth-incremental.yml
 name: "5️⃣📥🛠️ bookDepth Inc. Download & Feat."
 
 on:
@@ -55,10 +54,9 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           DIR=features/bookDepth/${SYMBOL}
           mkdir -p "$DIR"
-          # Letztes Parquet finden
-          OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$OLD" ]]; then
-            END_OLD=$(basename "$OLD" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
+          LAST=$(ls "$DIR"/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$LAST" ]]; then
+            END_OLD=$(basename "$LAST" .parquet | sed -E 's/^.*_to_([0-9-]+)$/\1/')
             START=$(date -I -d "$END_OLD + 1 day")
           else
             START=${{ steps.dates.outputs.global_start }}
@@ -71,7 +69,6 @@ jobs:
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
-          # Inception-Logik
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) INC="2023-01-01";;
             XRPUSDT)                           INC="2023-01-06";;
@@ -87,7 +84,7 @@ jobs:
               unzip -q -o "$ZIP" -d raw/bookDepth/"$SYMBOL"
             fi
             rm -f "$ZIP"
-            CUR=$(date -I -d "$CUR + 1 day")
+            CUR=$(date -I -d "$CUR +1 day")
           done
 
       - name: Extract only the new range into tmp
@@ -102,15 +99,18 @@ jobs:
 
       - name: Check for new features
         id: checknew
+        env:
+          TMP: features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet
         run: |
-          TMP="features/bookDepth/${{ matrix.symbol }}/tmp_${{ matrix.symbol }}.parquet"
           echo "→ Checking if $TMP contains any rows"
           if [[ -f "$TMP" ]]; then
-            python3 - << 'EOF'
-import pandas as pd, sys
-tmp = sys.argv[1]
+            python3 - <<'EOF'
+import os, sys
+import pandas as pd
+
+tmp = os.environ['TMP']
 df = pd.read_parquet(tmp)
-sys.exit(0 if len(df)>0 else 1)
+sys.exit(0 if len(df) > 0 else 1)
 EOF
           else
             echo "✔️ No tmp file → nothing to append"
@@ -128,18 +128,17 @@ EOF
           OUT="${DIR}/${SYMBOL}-features-${GS}_to_${NE}.parquet"
           OLD=$(ls "$DIR"/${SYMBOL}-features-*.parquet | sort | tail -n1)
           NEWTMP="$DIR/tmp_${SYMBOL}.parquet"
-
           echo "→ Merging $OLD + $NEWTMP → $OUT"
-          python3 - << 'PYCODE'
-import pandas as pd, sys
-old, new, out = sys.argv[1:]
+          python3 - <<'EOF'
+import sys
+import pandas as pd
+
+old, new, out = sys.argv[1], sys.argv[2], sys.argv[3]
 df_old = pd.read_parquet(old)
 df_new = pd.read_parquet(new)
 df = pd.concat([df_old, df_new]).sort_index()
 df.to_parquet(out, compression="snappy")
-PYCODE
-
-          # tmp und altes löschen
+EOF
           rm "$OLD" "$NEWTMP"
 
       - name: Cleanup raw data
