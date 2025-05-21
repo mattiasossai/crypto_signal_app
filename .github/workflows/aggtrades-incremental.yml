@@ -27,6 +27,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Make helper scripts executable
+        run: |
+          chmod +x scripts/check_tmp.py
+          chmod +x scripts/append_aggtrades.py
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
