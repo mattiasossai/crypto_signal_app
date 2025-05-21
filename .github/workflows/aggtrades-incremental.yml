@@ -1,3 +1,4 @@
+# .github/workflows/aggtrades-incremental.yml
 name: "4️⃣📥🛠️ aggTrades Inc. Download & Feat."
 
 on:
@@ -24,19 +25,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v4
-        with: { python-version: '3.12' }
+        with:
+          python-version: '3.12'
 
       - name: Install dependencies
         run: pip install --upgrade pandas pyarrow
 
-      - name: Calc dates
+      - name: Calculate dates
         id: dates
         run: |
-          echo "global_start=2025-01-01"       >> $GITHUB_OUTPUT
+          # globaler Startpunkt (fix für 2025)
+          echo "global_start=2025-01-01" >> $GITHUB_OUTPUT
+          # End = gestern
           echo "today=$(date -I -d 'yesterday')" >> $GITHUB_OUTPUT
 
       - name: Determine resume point
@@ -44,26 +49,26 @@ jobs:
         run: |
           SYMBOL=${{ matrix.symbol }}
           DIR=features/aggTrades/${SYMBOL}
-          old=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
-          if [[ -n "$old" ]]; then
-            old_end=$(basename "$old" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
-            start=$(date -I -d "$old_end + 1 day")
-            echo "mode=append" >> $GITHUB_OUTPUT
-            echo "start=$start"  >> $GITHUB_OUTPUT
+          # suche letzte Parquet
+          last=$(ls $DIR/${SYMBOL}-features-*.parquet 2>/dev/null | sort | tail -n1 || true)
+          if [[ -n "$last" ]]; then
+            # extract end date
+            prev_end=$(basename "$last" .parquet | sed -E 's/^.*_to_([0-9\-]+)$/\1/')
+            start=$(date -I -d "$prev_end + 1 day")
           else
-            echo "mode=fresh"   >> $GITHUB_OUTPUT
-            echo "start=${{ steps.dates.outputs.global_start }}" >> $GITHUB_OUTPUT
+            start=${{ steps.dates.outputs.global_start }}
           fi
+          echo "start=$start" >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
-      - name: Download & unpack aggTrades
+      - name: Download & unpack aggTrades (1-Day Overlap)
         shell: bash
         run: |
           SYMBOL=${{ matrix.symbol }}
           SD=${{ steps.resume.outputs.start }}
           ED=${{ steps.resume.outputs.end }}
 
-          # Inception-Logik
+          # Inception-Logik je Symbol
           case "$SYMBOL" in
             BTCUSDT|ETHUSDT) INC="2019-12-31";;
             XRPUSDT)         INC="2020-01-06";;
@@ -74,14 +79,14 @@ jobs:
           esac
           [[ "$(date -d"$SD" +%s)" -lt "$(date -d"$INC" +%s)" ]] && SD="$INC"
 
-          echo "→ Downloading aggTrades from $SD to $ED"
-          DATADIR=data/aggTrades/$SYMBOL
-          mkdir -p "$DATADIR"
+          echo "→ Downloading aggTrades $SYMBOL from $SD to $ED (incl. overlap)"
+          mkdir -p data/aggTrades/$SYMBOL
           CUR=$(date -I -d "$SD -1 day")
-          while [[ "$CUR" < "$ED" || "$CUR" == "$ED" ]]; do
+          while [[ "$CUR" <= "$ED" ]]; do
             ZIP="${SYMBOL}-aggTrades-${CUR}.zip"
+            echo "→ Fetching $ZIP"
             if curl -sSf "https://data.binance.vision/data/futures/um/daily/aggTrades/$SYMBOL/$ZIP" -o "$ZIP"; then
-              unzip -p "$ZIP" > "$DATADIR/${ZIP%.zip}.csv"
+              unzip -p "$ZIP" > data/aggTrades/"$SYMBOL"/"${ZIP%.zip}.csv"
               rm -f "$ZIP"
             else
               echo "⚠️ Missing $ZIP – skipping"
@@ -90,23 +95,44 @@ jobs:
             CUR=$(date -I -d "$CUR +1 day")
           done
 
-      - name: Feature extraction & append
+      - name: Merge into Parquet & append
+        shell: bash
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          SD=${{ steps.resume.outputs.start }}
-          ED=${{ steps.resume.outputs.end }}
-          OUTDIR=features/aggTrades/${SYMBOL}
-          mkdir -p "$OUTDIR"
-          OUT="$OUTDIR/${SYMBOL}-features-${SD}_to_${ED}.parquet"
-          python3 extract_aggTrades_features.py \
-            --input-dir   data/aggTrades/${SYMBOL} \
-            --start-date  "$SD" \
-            --end-date    "$ED" \
-            --output-file "$OUT"
+          set -euo pipefail
 
-      - name: Cleanup raw download folder
-        if: always()
-        run: rm -rf data/aggTrades/${{ matrix.symbol }}
+          SYMBOL=${{ matrix.symbol }}
+          GS=${{ steps.dates.outputs.global_start }}
+          NE=${{ steps.resume.outputs.end }}
+          DIR=features/aggTrades/${SYMBOL}
+          mkdir -p $DIR
+
+          OLD=$DIR/${SYMBOL}-features-${GS}_to_*.parquet
+          OUT=$DIR/${SYMBOL}-features-${GS}_to_${NE}.parquet
+
+          # 1) erzeuge only-new in tmp
+          TMP=$(mktemp --suffix=.parquet)
+          python3 extract_aggTrades_features.py \
+            --input-dir data/aggTrades/${SYMBOL} \
+            --start-date "${{ steps.resume.outputs.start }}" \
+            --end-date   "${NE}" \
+            --output-file "$TMP"
+
+          # 2) merge mit altem, lösche altes
+          if compgen -G "$OLD" > /dev/null; then
+            python3 - <<EOF
+import pandas as pd
+old = pd.read_parquet("$OLD")
+new = pd.read_parquet("$TMP")
+df  = pd.concat([old, new]).sort_index()
+df.to_parquet("$OUT", compression="snappy")
+EOF
+            rm $OLD
+          else
+            mv $TMP $OUT
+          fi
+          rm -f $TMP
+
+          git add $OUT
 
       - name: Commit & Push
         run: |
@@ -114,6 +140,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout main
           git pull --rebase origin main
-          git add features/aggTrades/${{ matrix.symbol }}
-          git commit -m "♻️ ${{ matrix.symbol }} aggTrades-Features ${SD} to ${ED}" || echo "No changes"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          git commit -m "♻️ ${{ matrix.symbol }} aggTrades features ${GS}→${NE}" || echo "No changes to commit"
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
+
+      - name: Cleanup raw CSVs
+        if: always()
+        run: rm -rf data/aggTrades/${{ matrix.symbol }}
