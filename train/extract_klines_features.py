@@ -131,7 +131,7 @@ def concat_csvs(symbol, interval):
     df.rename(columns=str.capitalize, inplace=True)
     return df
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── Hauptprozess ─────────────────────────────────────────────────────────────
 def process_symbol_interval(symbol, interval):
     df = concat_csvs(symbol, interval)
     if df.empty:
@@ -142,7 +142,6 @@ def process_symbol_interval(symbol, interval):
     df = add_fibonacci_levels(df, lookbacks=(20,50,100))
     df = add_candlestick_patterns(df)
 
-    # flatten MultiIndex if any
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [
             c if isinstance(c, str) else "_".join(c).strip()
