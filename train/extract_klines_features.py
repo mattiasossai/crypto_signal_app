@@ -6,6 +6,7 @@ import numpy as np
 import pandas_ta as ta
 import logging
 import argparse
+import talib   # <- TA-Lib importieren!
 
 RAW_ROOT      = 'raw/klines'
 FEATURES_ROOT = 'features/klines'
@@ -94,12 +95,13 @@ def add_fibonacci_levels(df, lookbacks=(20, 50, 100)):
     return df
 
 def add_candlestick_patterns(df):
-    o, h, l, c = df["Open"], df["High"], df["Low"], df["Close"]
-    df["Bull_Engulf"] = ta.cdl_engulfing(o, h, l, c)
-    df["Bear_Engulf"] = -df["Bull_Engulf"]
-    df["Doji"] = ta.cdl_doji(o, h, l, c)
-    df["Hammer"] = ta.cdl_hammer(o, h, l, c)
-    df["ShootingStar"] = ta.cdl_shootingstar(o, h, l, c)
+    o, h, l, c = df["Open"].values, df["High"].values, df["Low"].values, df["Close"].values
+    # TA-Lib Pattern-Funktionen geben Integer (1, 0, -1) für Pattern, sonst 0 zurück.
+    df["Bull_Engulf"] = talib.CDLENGULFING(o, h, l, c)
+    df["Bear_Engulf"] = -talib.CDLENGULFING(o, h, l, c)
+    df["Doji"] = talib.CDLDOJI(o, h, l, c)
+    df["Hammer"] = talib.CDLHAMMER(o, h, l, c)
+    df["ShootingStar"] = talib.CDLSHOOTINGSTAR(o, h, l, c)
     return df
 
 def concat_csvs(symbol, interval):
