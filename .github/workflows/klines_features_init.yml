@@ -20,10 +20,29 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install dependencies
+
+      - name: Install TA-Lib system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libtool libffi-dev ruby ruby-dev make
+          sudo apt-get install -y python3-dev
+          sudo apt-get install -y libopenblas-dev
+          sudo apt-get install -y liblapack-dev
+          sudo apt-get install -y gfortran
+          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzvf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib
+          ./configure --prefix=/usr
+          make
+          sudo make install
+          cd ..
+
+      - name: Install Python dependencies
         run: |
           pip install "numpy<1.24"
           pip install pandas pyarrow pandas-ta --upgrade
+          pip install TA-Lib
+          
       - name: Run Klines Feature Extraction
         run: |
           echo "Extracting features for ${{ matrix.symbol }} / ${{ matrix.interval }}"
