@@ -22,27 +22,75 @@ def add_indicators(df):
         df[f'SMA{n}'] = ta.sma(c, length=n)
     df['VWAP'] = ta.vwap(h, l, c, v)
     df['OBV'] = ta.obv(c, v)
-    df['MFI14'] = ta.mfi(h, l, c, v, length=14)
+    df['MFI14'] = ta.mfi(h, l, c, v, length=14).astype(float)
+
     adx = ta.adx(h, l, c, length=14)
-    df = pd.concat([df, adx], axis=1)
+    if isinstance(adx, pd.DataFrame):
+        for col in adx.columns:
+            df[col] = adx[col]
+
     df['CCI14'] = ta.cci(h, l, c, length=14)
     df['RSI14'] = ta.rsi(c, length=14)
+
     macd = ta.macd(c, fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd], axis=1)
+    if isinstance(macd, pd.DataFrame):
+        for col in macd.columns:
+            df[col] = macd[col]
+
     bb = ta.bbands(c, length=20, std=2)
-    df = pd.concat([df, bb], axis=1)
+    if isinstance(bb, pd.DataFrame):
+        for col in bb.columns:
+            df[col] = bb[col]
+
     df['ATR14'] = ta.atr(h, l, c, length=14)
+
     st = ta.supertrend(h, l, c, length=10, multiplier=3.0)
-    df['Supertrend'] = st["SUPERT_10_3.0"] if "SUPERT_10_3.0" in st else np.nan
+    if isinstance(st, pd.DataFrame):
+        for col in st.columns:
+            df[col] = st[col]
+        if "SUPERT_10_3.0" in st:
+            df['Supertrend'] = st["SUPERT_10_3.0"]
+    else:
+        df['Supertrend'] = np.nan
+
     df['WillR14'] = ta.willr(h, l, c, length=14)
     df['CMF20'] = ta.cmf(h, l, c, v, length=20)
+
     psar = ta.psar(h, l, c, step=0.02, max_step=0.2)
-    df['PSAR'] = psar["PSARl_0.02_0.2"] if "PSARl_0.02_0.2" in psar else np.nan
-    df['UO'] = ta.uo(h, l, c, s7=7, s14=14, s28=28)
-    df['TSI'] = ta.tsi(c, r=25, s=13)
+    if isinstance(psar, pd.DataFrame):
+        for col in psar.columns:
+            df[col] = psar[col]
+        if "PSARl_0.02_0.2" in psar:
+            df['PSAR'] = psar["PSARl_0.02_0.2"]
+    else:
+        df['PSAR'] = np.nan
+
+    uo = ta.uo(h, l, c, s7=7, s14=14, s28=28)
+    df['UO'] = uo
+
+    tsi = ta.tsi(c, r=25, s=13)
+    if isinstance(tsi, pd.DataFrame):
+        for col in tsi.columns:
+            df[col] = tsi[col]
+        if "TSI_25_13" in tsi:
+            df['TSI'] = tsi["TSI_25_13"]
+    else:
+        df['TSI'] = tsi
+
     df['EMA50_200_Ratio'] = df['EMA50'] / df['EMA200']
     df['VWAP_Close_Ratio'] = df['VWAP'] / df['Close']
     df['ST_Close_Ratio'] = df['Supertrend'] / df['Close']
+    return df
+
+def add_fibonacci_levels(df, lookbacks=(20, 50, 100)):
+    for lb in lookbacks:
+        highs = df['High'].rolling(window=lb, min_periods=1).max()
+        lows = df['Low'].rolling(window=lb, min_periods=1).min()
+        df[f'Fibo_236_{lb}'] = highs - (highs - lows) * 0.236
+        df[f'Fibo_382_{lb}'] = highs - (highs - lows) * 0.382
+        df[f'Fibo_500_{lb}'] = highs - (highs - lows) * 0.5
+        df[f'Fibo_618_{lb}'] = highs - (highs - lows) * 0.618
+        df[f'Fibo_786_{lb}'] = highs - (highs - lows) * 0.786
     return df
 
 def add_candlestick_patterns(df):
@@ -61,15 +109,12 @@ def concat_csvs(symbol, interval):
     dfs = []
     for f in csv_files:
         try:
-            # 1. Versuch: mit Header
             df = pd.read_csv(f, header=0)
-            # Teste, ob Spaltennamen wie erwartet
             expected_cols = ["open_time", "open", "high", "low", "close", "volume"]
             if list(df.columns[:6]) == expected_cols:
                 df = df.iloc[:, :6]
                 df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
             else:
-                # 2. Versuch: ohne Header
                 df = pd.read_csv(f, header=None)
                 df = df.iloc[:, :6]
                 df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
@@ -96,6 +141,7 @@ def process_symbol_interval(symbol, interval):
         return
 
     df = add_indicators(df)
+    df = add_fibonacci_levels(df, lookbacks=(20, 50, 100))
     df = add_candlestick_patterns(df)
     df['symbol'] = symbol
     df['interval'] = interval
