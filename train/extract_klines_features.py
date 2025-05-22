@@ -5,6 +5,15 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 import logging
+import argparse
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--symbol', type=str, required=True)
+    parser.add_argument('--interval', type=str, required=True)
+    args = parser.parse_args()
+
+    process_symbol_interval(args.symbol, args.interval)
 
 # ─── Einstellungen ───────────────────────
 RAW_ROOT      = 'raw/klines'
