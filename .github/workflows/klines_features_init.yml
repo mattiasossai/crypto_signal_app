@@ -1,4 +1,4 @@
-name: 🟣 Initial Klines Feature Extraction
+name: 🟣 Klines Features Matrix Extraction
 
 on:
   workflow_dispatch:
@@ -6,6 +6,13 @@ on:
 jobs:
   extract_klines_features:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        interval: [1m, 5m, 15m, 1h, 4h]
+      max-parallel: 1  # Bei Performance-Problemen auf 2-3 erhöhen
+      fail-fast: false
+
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
@@ -17,16 +24,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy pandas-ta pyarrow
+          pip install "numpy<1.24"
+          pip install pandas pyarrow pandas-ta --upgrade
 
-      - name: Run klines feature extraction
+      - name: Run Klines Feature Extraction (Symbol: ${{ matrix.symbol }}, Interval: ${{ matrix.interval }})
         run: |
-          python train/extract_klines_features.py
+          python train/extract_klines_features.py --symbol ${{ matrix.symbol }} --interval ${{ matrix.interval }}
 
       - name: Commit and push features
         run: |
           git config --global user.name 'github-actions'
           git config --global user.email 'actions@github.com'
-          git add features/klines/
-          git commit -m "Initial Klines Features Extracted"
+          git add features/klines/${{ matrix.symbol }}/${{ matrix.interval }}/features-${{ matrix.symbol }}-${{ matrix.interval }}.parquet
+          git commit -m "Features for ${{ matrix.symbol }}-${{ matrix.interval }}"
           git push
+        continue-on-error: true  # So laufen andere weiter, auch wenn einer fehlschlägt
