@@ -18,7 +18,9 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: main                 # holt immer den aktuellen main-Tip
+          fetch-depth: 0            # komplettes Git-History
+          persist-credentials: true # behält GITHUB_TOKEN für Push
 
       - name: Cache pip
         uses: actions/cache@v3
