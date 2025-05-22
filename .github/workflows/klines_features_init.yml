@@ -1,0 +1,32 @@
+name: 🟣 Initial Klines Feature Extraction
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract_klines_features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy pandas-ta pyarrow
+
+      - name: Run klines feature extraction
+        run: |
+          python train/extract_klines_features.py
+
+      - name: Commit and push features
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'actions@github.com'
+          git add features/klines/
+          git commit -m "Initial Klines Features Extracted"
+          git push
