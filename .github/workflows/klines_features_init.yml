@@ -24,17 +24,25 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          key: ${{ runner.os }}-pip-cache
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install TA-Lib system libs (apt)
+      - name: Build TA-Lib from source
         run: |
           sudo apt-get update
-          sudo apt-get install -y libta-lib0 libta-lib0-dev
+          sudo apt-get install -y wget build-essential automake autoconf libtool pkg-config
+          wget https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib
+          ./configure --prefix=/usr/local
+          make
+          sudo make install
+          sudo ldconfig
+          cd ..
 
       - name: Install Python dependencies
         run: |
@@ -43,8 +51,7 @@ jobs:
           pip install TA-Lib
 
       - name: List raw CSVs
-        run: |
-          ls -R raw/klines/${{ matrix.symbol }} | sed 's/^/  /'
+        run: ls -R raw/klines/${{ matrix.symbol }} | sed 's/^/  /'
 
       - name: Run Klines Feature Extraction
         run: |
