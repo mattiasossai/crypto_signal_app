@@ -38,10 +38,12 @@ jobs:
           wget https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
           tar -xzf ta-lib-0.4.0-src.tar.gz
           cd ta-lib
-          ./configure --prefix=/usr/local
+          ./configure --prefix=/usr     # install libs into /usr/lib
           make
           sudo make install
           sudo ldconfig
+          # create symlink so that Python wrapper finds "-lta-lib"
+          sudo ln -sf /usr/lib/libta_lib.so /usr/lib/libta-lib.so
           cd ..
 
       - name: Install Python dependencies
