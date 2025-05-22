@@ -18,7 +18,7 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# ─── Einstellungen ─────────────────────────────────────────────────────────────
+# ─── Settings ─────────────────────────────────────────────────────────────────
 RAW_ROOT      = 'raw/klines'
 FEATURES_ROOT = 'features/klines'
 
@@ -27,36 +27,30 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s'
 )
 
-# ─── Technische Indikatoren ────────────────────────────────────────────────────
+# ─── Indicators ────────────────────────────────────────────────────────────────
 def add_indicators(df):
     c, h, l, v = df['Close'], df['High'], df['Low'], df['Volume']
     for n in (20, 50, 100, 200):
         df[f'EMA{n}'] = ta.ema(c, length=n)
         df[f'SMA{n}'] = ta.sma(c, length=n)
-    df['VWAP']  = ta.vwap(h, l, c, v)
-    df['OBV']   = ta.obv(c, v)
-    df['MFI14'] = ta.mfi(h, l, c, v, length=14).astype(float)
-
+    df['VWAP']   = ta.vwap(h, l, c, v)
+    df['OBV']    = ta.obv(c, v)
+    df['MFI14']  = ta.mfi(h, l, c, v, length=14).astype(float)
     adx = ta.adx(h, l, c, length=14)
     if isinstance(adx, pd.DataFrame):
         for col in adx.columns:
             df[col] = adx[col]
-
-    df['CCI14'] = ta.cci(h, l, c, length=14)
-    df['RSI14'] = ta.rsi(c, length=14)
-
+    df['CCI14']  = ta.cci(h, l, c, length=14)
+    df['RSI14']  = ta.rsi(c, length=14)
     macd = ta.macd(c, fast=12, slow=26, signal=9)
     if isinstance(macd, pd.DataFrame):
         for col in macd.columns:
             df[col] = macd[col]
-
     bb = ta.bbands(c, length=20, std=2)
     if isinstance(bb, pd.DataFrame):
         for col in bb.columns:
             df[col] = bb[col]
-
     df['ATR14'] = ta.atr(h, l, c, length=14)
-
     st = ta.supertrend(h, l, c, length=10, multiplier=3.0)
     if isinstance(st, pd.DataFrame):
         for col in st.columns:
@@ -65,10 +59,8 @@ def add_indicators(df):
             df['Supertrend'] = st["SUPERT_10_3.0"]
     else:
         df['Supertrend'] = np.nan
-
     df['WillR14'] = ta.willr(h, l, c, length=14)
     df['CMF20']   = ta.cmf(h, l, c, v, length=20)
-
     psar = ta.psar(h, l, c, step=0.02, max_step=0.2)
     if isinstance(psar, pd.DataFrame):
         for col in psar.columns:
@@ -77,9 +69,7 @@ def add_indicators(df):
             df['PSAR'] = psar["PSARl_0.02_0.2"]
     else:
         df['PSAR'] = np.nan
-
     df['UO'] = ta.uo(h, l, c, s7=7, s14=14, s28=28)
-
     tsi = ta.tsi(c, r=25, s=13)
     if isinstance(tsi, pd.DataFrame):
         for col in tsi.columns:
@@ -88,13 +78,12 @@ def add_indicators(df):
             df['TSI'] = tsi["TSI_25_13"]
     else:
         df['TSI'] = tsi
-
     df['EMA50_200_Ratio'] = df['EMA50'] / df['EMA200']
     df['VWAP_Close_Ratio'] = df['VWAP'] / df['Close']
     df['ST_Close_Ratio']   = df['Supertrend'] / df['Close']
     return df
 
-# ─── Fibonacci Retracement (Multi-Lookback) ────────────────────────────────────
+# ─── Fibonacci Retracement ────────────────────────────────────────────────────
 def add_fibonacci_levels(df, lookbacks=(20,50,100)):
     for lb in lookbacks:
         highs = df['High'].rolling(lb, min_periods=1).max()
@@ -108,8 +97,8 @@ def add_fibonacci_levels(df, lookbacks=(20,50,100)):
 
 # ─── Candlestick Patterns via TA-Lib ───────────────────────────────────────────
 def add_candlestick_patterns(df):
-    o = df["Open"].values;   h = df["High"].values
-    l = df["Low"].values;    c = df["Close"].values
+    o = df["Open"].values; h = df["High"].values
+    l = df["Low"].values;  c = df["Close"].values
     df["Bull_Engulf"]  = talib.CDLENGULFING(o,h,l,c)
     df["Bear_Engulf"]  = -talib.CDLENGULFING(o,h,l,c)
     df["Doji"]         = talib.CDLDOJI(o,h,l,c)
@@ -117,7 +106,7 @@ def add_candlestick_patterns(df):
     df["ShootingStar"] = talib.CDLSHOOTINGSTAR(o,h,l,c)
     return df
 
-# ─── CSV-Zusammenführung mit Header-Check ─────────────────────────────────────
+# ─── CSV Loader mit Header-Check ───────────────────────────────────────────────
 def concat_csvs(symbol, interval):
     path = os.path.join(RAW_ROOT, symbol)
     files = sorted(glob.glob(os.path.join(path, f"{symbol}-{interval}-*.csv")))
@@ -133,7 +122,7 @@ def concat_csvs(symbol, interval):
                 df.columns = ["timestamp","open","high","low","close","volume"]
             dfs.append(df)
         except Exception as e:
-            logging.warning(f"Fehler beim Laden {fn}: {e}")
+            logging.warning(f"Failed load {fn}: {e}")
     if not dfs:
         return pd.DataFrame()
     df = pd.concat(dfs, ignore_index=True)
@@ -142,21 +131,21 @@ def concat_csvs(symbol, interval):
     df.rename(columns=str.capitalize, inplace=True)
     return df
 
-# ─── Hauptprozess ─────────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────────
 def process_symbol_interval(symbol, interval):
     df = concat_csvs(symbol, interval)
     if df.empty:
-        logging.error(f"No data for {symbol}-{interval}, aborting.")
+        logging.error(f"No data for {symbol}-{interval}, abort.")
         sys.exit(1)
 
     df = add_indicators(df)
     df = add_fibonacci_levels(df, lookbacks=(20,50,100))
     df = add_candlestick_patterns(df)
 
-    # MultiIndex-Columns flatten
+    # flatten MultiIndex if any
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [
-            c if isinstance(c, str) else "_".join([str(x) for x in c]).strip()
+            c if isinstance(c, str) else "_".join(c).strip()
             for c in df.columns
         ]
 
