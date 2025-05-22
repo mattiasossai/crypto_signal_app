@@ -9,13 +9,23 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        symbol:   [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
         interval: [1m, 5m, 15m, 1h, 4h]
       max-parallel: 1
       fail-fast: false
+
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -24,23 +34,32 @@ jobs:
       - name: Install TA-Lib system libs (apt)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ta-lib
+          sudo apt-get install -y libta-lib0 libta-lib0-dev
 
       - name: Install Python dependencies
         run: |
           pip install "numpy<1.24"
           pip install pandas pyarrow pandas-ta --upgrade
           pip install TA-Lib
-          
+
+      - name: List raw CSVs
+        run: |
+          ls -R raw/klines/${{ matrix.symbol }} | sed 's/^/  /'
+
       - name: Run Klines Feature Extraction
         run: |
           echo "Extracting features for ${{ matrix.symbol }} / ${{ matrix.interval }}"
           python train/extract_klines_features.py --symbol ${{ matrix.symbol }} --interval ${{ matrix.interval }}
+
       - name: Commit and push features
         run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'actions@github.com'
           git add features/klines/${{ matrix.symbol }}/${{ matrix.interval }}/features-${{ matrix.symbol }}-${{ matrix.interval }}.parquet
-          git commit -m "Features for ${{ matrix.symbol }}-${{ matrix.interval }}"
-          git push
+          if git diff --cached --quiet; then
+            echo "✔️ No changes to commit"
+          else
+            git config user.name 'github-actions'
+            git config user.email 'actions@github.com'
+            git commit -m "Features for ${{ matrix.symbol }}-${{ matrix.interval }}"
+            git push
+          fi
         continue-on-error: true
