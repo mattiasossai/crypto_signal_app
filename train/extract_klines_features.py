@@ -9,7 +9,6 @@ import argparse
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
-import talib
 
 # ─── Warnungen unterdrücken ─────────────────────────────────────────────────────
 warnings.filterwarnings(
@@ -95,15 +94,27 @@ def add_fibonacci_levels(df, lookbacks=(20,50,100)):
         df[f'Fibo_786_{lb}'] = highs - (highs - lows) * 0.786
     return df
 
-# ─── Candlestick Patterns via TA-Lib ───────────────────────────────────────────
+# ─── Candlestick Patterns (Pandas-Logik) ──────────────────────────────────────
 def add_candlestick_patterns(df):
-    o = df["Open"].values; h = df["High"].values
-    l = df["Low"].values;  c = df["Close"].values
-    df["Bull_Engulf"]  = talib.CDLENGULFING(o,h,l,c)
-    df["Bear_Engulf"]  = -talib.CDLENGULFING(o,h,l,c)
-    df["Doji"]         = talib.CDLDOJI(o,h,l,c)
-    df["Hammer"]       = talib.CDLHAMMER(o,h,l,c)
-    df["ShootingStar"] = talib.CDLSHOOTINGSTAR(o,h,l,c)
+    o = df['Open']; c = df['Close']; h = df['High']; l = df['Low']
+    po = o.shift(1); pc = c.shift(1)
+    # Bullish / Bearish Engulfing
+    df['Bull_Engulf'] = (
+        (c > o) & (pc < po) & (o < pc) & (c > po)
+    ).astype(int)
+    df['Bear_Engulf'] = (
+        (c < o) & (pc > po) & (o > pc) & (c < po)
+    ).astype(int)
+    # Doji
+    df['Doji'] = (abs(c - o) <= (h - l) * 0.1).astype(int)
+    # Hammer: long lower shadow >2×body, body near top
+    df['Hammer'] = (
+        ((np.minimum(o, c) - l) > 2 * abs(c - o))
+    ).astype(int)
+    # Shooting Star: long upper shadow >2×body, body near bottom
+    df['ShootingStar'] = (
+        ((h - np.maximum(o, c)) > 2 * abs(c - o))
+    ).astype(int)
     return df
 
 # ─── CSV Loader mit Header-Check ───────────────────────────────────────────────
@@ -113,16 +124,16 @@ def concat_csvs(symbol, interval):
     dfs = []
     for fn in files:
         try:
-            df = pd.read_csv(fn, header=0)
-            if list(df.columns[:6]) == ["open_time","open","high","low","close","volume"]:
-                df = df.iloc[: , :6]
-                df.columns = ["timestamp","open","high","low","close","volume"]
+            tmp = pd.read_csv(fn, header=0)
+            if list(tmp.columns[:6]) == ["open_time","open","high","low","close","volume"]:
+                tmp = tmp.iloc[:, :6]
+                tmp.columns = ["timestamp","open","high","low","close","volume"]
             else:
-                df = pd.read_csv(fn, header=None).iloc[: , :6]
-                df.columns = ["timestamp","open","high","low","close","volume"]
-            dfs.append(df)
+                tmp = pd.read_csv(fn, header=None).iloc[:, :6]
+                tmp.columns = ["timestamp","open","high","low","close","volume"]
+            dfs.append(tmp)
         except Exception as e:
-            logging.warning(f"Failed load {fn}: {e}")
+            logging.warning(f"Failed loading {fn}: {e}")
     if not dfs:
         return pd.DataFrame()
     df = pd.concat(dfs, ignore_index=True)
@@ -131,11 +142,11 @@ def concat_csvs(symbol, interval):
     df.rename(columns=str.capitalize, inplace=True)
     return df
 
-# ─── Hauptprozess ─────────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────────
 def process_symbol_interval(symbol, interval):
     df = concat_csvs(symbol, interval)
     if df.empty:
-        logging.error(f"No data for {symbol}-{interval}, abort.")
+        logging.error(f"No data for {symbol}-{interval}, aborting.")
         sys.exit(1)
 
     df = add_indicators(df)
