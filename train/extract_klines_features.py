@@ -7,6 +7,10 @@ import pandas_ta as ta
 import logging
 import argparse
 
+def process_symbol_interval(symbol, interval):
+    # ... DEIN KOMPLETTER CODE wie oben ...
+    print(f"Processing {symbol} {interval}")
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--symbol', type=str, required=True)
