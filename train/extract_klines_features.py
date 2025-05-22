@@ -56,16 +56,22 @@ def add_candlestick_patterns(df):
 
 def concat_csvs(symbol, interval):
     dir_path = os.path.join(RAW_ROOT, symbol)
-    # Nur Dateien mit dem gesuchten Intervall!
     pattern = f"{symbol}-{interval}-*.csv"
     csv_files = sorted(glob.glob(os.path.join(dir_path, pattern)))
     dfs = []
     for f in csv_files:
         try:
-            df = pd.read_csv(f)
-            # Header check (wie gehabt)
-            if not set(['timestamp', 'open', 'high', 'low', 'close', 'volume']).issubset(df.columns):
+            # 1. Versuch: mit Header
+            df = pd.read_csv(f, header=0)
+            # Teste, ob Spaltennamen wie erwartet
+            expected_cols = ["open_time", "open", "high", "low", "close", "volume"]
+            if list(df.columns[:6]) == expected_cols:
+                df = df.iloc[:, :6]
+                df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+            else:
+                # 2. Versuch: ohne Header
                 df = pd.read_csv(f, header=None)
+                df = df.iloc[:, :6]
                 df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
             dfs.append(df)
         except Exception as e:
