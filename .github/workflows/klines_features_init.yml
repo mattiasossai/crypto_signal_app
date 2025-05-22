@@ -31,25 +31,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Build TA-Lib from source
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget build-essential automake autoconf libtool pkg-config
-          wget https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-          tar -xzf ta-lib-0.4.0-src.tar.gz
-          cd ta-lib
-          ./configure --prefix=/usr      # installieren nach /usr/lib
-          make
-          sudo make install
-          sudo ldconfig
-          sudo ln -sf /usr/lib/libta_lib.so /usr/lib/libta-lib.so
-          cd ..
-
       - name: Install Python dependencies
         run: |
           pip install "numpy<1.24"
           pip install pandas pyarrow pandas-ta --upgrade
-          pip install TA-Lib
 
       - name: List raw CSVs for this interval
         run: |
