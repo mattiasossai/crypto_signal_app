@@ -68,6 +68,13 @@ jobs:
           echo "start=$START"     >> $GITHUB_OUTPUT
           echo "end=${{ steps.dates.outputs.today }}" >> $GITHUB_OUTPUT
 
+          # Wenn kein neuer Tag übrig bleibt (START > END), abbrechen
+      - name: Nichts Neues zu verarbeiten → Skip
+        if: ${{ steps.resume.outputs.start > steps.resume.outputs.end }}
+        run: |
+           echo "✔️ Keine neuen bookDepth-Daten (start > end), Job wird beendet."
+           exit 0
+
       - name: Download & unzip bookDepth
         run: |
           SYMBOL=${{ matrix.symbol }}
