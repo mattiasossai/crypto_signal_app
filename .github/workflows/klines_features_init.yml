@@ -38,11 +38,10 @@ jobs:
           wget https://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
           tar -xzf ta-lib-0.4.0-src.tar.gz
           cd ta-lib
-          ./configure --prefix=/usr     # install libs into /usr/lib
+          ./configure --prefix=/usr      # installieren nach /usr/lib
           make
           sudo make install
           sudo ldconfig
-          # create symlink so that Python wrapper finds "-lta-lib"
           sudo ln -sf /usr/lib/libta_lib.so /usr/lib/libta-lib.so
           cd ..
 
@@ -52,8 +51,10 @@ jobs:
           pip install pandas pyarrow pandas-ta --upgrade
           pip install TA-Lib
 
-      - name: List raw CSVs
-        run: ls -R raw/klines/${{ matrix.symbol }} | sed 's/^/  /'
+      - name: List raw CSVs for this interval
+        run: |
+          echo "Raw CSVs for ${{ matrix.symbol }} / ${{ matrix.interval }}:"
+          ls raw/klines/${{ matrix.symbol }}/*-${{ matrix.interval }}-*.csv | sed 's/^/  /'
 
       - name: Run Klines Feature Extraction
         run: |
