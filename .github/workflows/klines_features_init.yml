@@ -5,6 +5,7 @@ on:
 
 jobs:
   extract_klines_features:
+    name: Extract Features ${{ matrix.symbol }} @ ${{ matrix.interval }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -12,25 +13,21 @@ jobs:
         interval: [1m, 5m, 15m, 1h, 4h]
       max-parallel: 1
       fail-fast: false
-
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
           pip install "numpy<1.24"
           pip install pandas pyarrow pandas-ta --upgrade
-
-      - name: Run Klines Feature Extraction (Symbol: ${{ matrix.symbol }}, Interval: ${{ matrix.interval }})
+      - name: Run Klines Feature Extraction
         run: |
+          echo "Extracting features for ${{ matrix.symbol }} / ${{ matrix.interval }}"
           python train/extract_klines_features.py --symbol ${{ matrix.symbol }} --interval ${{ matrix.interval }}
-
       - name: Commit and push features
         run: |
           git config --global user.name 'github-actions'
