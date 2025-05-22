@@ -4,7 +4,7 @@ name: "1️⃣🕯️ Download & Commit Historical Klines"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '50 7 * * *'  # täglich 07:50 UTC
+    - cron: '55 7 * * *'  # täglich 07:55 UTC
 
 jobs:
   download_matrix:
