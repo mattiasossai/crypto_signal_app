@@ -10,7 +10,7 @@ on:
         description: 'Enddatum (YYYY-MM-DD)'
         required: false
   schedule:
-    - cron: '40 8 * * *'  # täglich 08:40 UTC
+    - cron: '55 8 * * *'  # täglich 08:55 UTC
 
 jobs:
   download-and-feature:
