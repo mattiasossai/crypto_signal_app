@@ -21,21 +21,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install TA-Lib system deps
+      - name: Install TA-Lib system libs (apt)
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libtool libffi-dev ruby ruby-dev make
-          sudo apt-get install -y python3-dev
-          sudo apt-get install -y libopenblas-dev
-          sudo apt-get install -y liblapack-dev
-          sudo apt-get install -y gfortran
-          wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-          tar -xzvf ta-lib-0.4.0-src.tar.gz
-          cd ta-lib
-          ./configure --prefix=/usr
-          make
-          sudo make install
-          cd ..
+          sudo apt-get install -y ta-lib
 
       - name: Install Python dependencies
         run: |
