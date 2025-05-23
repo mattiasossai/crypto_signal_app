@@ -4,3 +4,7 @@ scikit-learn
 tensorflow>=2.9
 pandas-ta
 joblib
+pandas>=1.4.0
+numpy>=1.21.0
+pyarrow>=6.0.0
+awscli>=1.20.0
