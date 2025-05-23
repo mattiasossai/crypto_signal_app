@@ -47,7 +47,7 @@ jobs:
 
           # 1) Funding-Rate ZIPs
           PER=$START
-          while [[ "$PER" <= "$LAST_FULL" ]]; do
+          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
             ZF="$SYM-fundingRate-$PER.zip"
             UF="$BASE_F/$SYM/$ZF"
             echo "→ Funding $ZF"
@@ -60,7 +60,7 @@ jobs:
 
           # 2) Premium-Index ZIPs
           PER=$START
-          while [[ "$PER" <= "$LAST_FULL" ]]; do
+          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
             ZP="$SYM-1h-$PER.zip"
             UP="$BASE_P/$SYM/1h/$ZP"
             echo "→ Premium $ZP"
@@ -70,7 +70,7 @@ jobs:
             fi
             PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
           done
-
+          
       - name: Funding-Extraktor ausführen
         env:
           SYMBOL: ${{ matrix.symbol }}
