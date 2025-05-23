@@ -1,12 +1,15 @@
-import os, glob, gzip, re
-import pandas as pd, numpy as np
+import os
+import glob
+import re
+import pandas as pd
+import numpy as np
 from utils import init_logger, save_parquet
 
 logger = init_logger("funding_features")
 
-# Basis-Verzeichnisse
-LOCAL_BASE  = "data/futures/um/monthly/fundingRate"
-OUTPUT_DIR  = "features/funding"
+# Basis-Pfade
+LOCAL_BASE = "data/futures/um/monthly/fundingRate"
+OUTPUT_DIR = "features/funding"
 
 # Inception-Daten pro Symbol
 SYMBOL_START = {
@@ -22,66 +25,93 @@ SYMBOL_START = {
 ROLL_HOURS = 8
 SMA_DAYS   = 7
 
-def list_files(symbol: str):
+def list_files(symbol: str) -> list[str]:
+    """Gibt alle CSV-Dateien für das Symbol zurück."""
     path = f"{LOCAL_BASE}/{symbol}"
     return sorted(glob.glob(f"{path}/{symbol}-fundingRate-*.csv"))
 
 def load_and_concat(files: list[str]) -> pd.DataFrame:
+    """
+    Liest alle CSVs ein, mappt calc_time → fundingTime und
+    last_funding_rate → fundingRate, und verbindet sie.
+    """
     dfs = []
     for fn in files:
         logger.info(f"Lade {fn}")
-        opener = gzip.open if fn.endswith(".gz") else open
-        with opener(fn, "rt") as f:
-            df = pd.read_csv(f)
-        df["fundingTime"] = pd.to_datetime(df["fundingTime"], unit="ms")
-        dfs.append(df)
+        df = pd.read_csv(fn)
+        # Spalten umbenennen
+        if "calc_time" not in df.columns or "last_funding_rate" not in df.columns:
+            raise KeyError(f"Unerwartetes Format in {fn}")
+        df["fundingTime"] = pd.to_datetime(df["calc_time"], unit="ms")
+        df["fundingRate"]  = df["last_funding_rate"]
+        dfs.append(df[["fundingTime", "fundingRate"]])
+
     if not dfs:
-        raise ValueError("Keine Dateien zum Einlesen für Symbol")
-    df = pd.concat(dfs, ignore_index=True)
-    df = df.sort_values("fundingTime").drop_duplicates(["fundingTime"])
-    return df.set_index("fundingTime")
+        raise ValueError("Keine Dateien zum Einlesen gefunden.")
+
+    # zusammenführen, sortieren und Index setzen
+    df_all = pd.concat(dfs, ignore_index=True)
+    df_all = df_all.sort_values("fundingTime").drop_duplicates(["fundingTime"])
+    return df_all.set_index("fundingTime")
 
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Berechnet alle gewünschten Features auf Stunden-Basis."""
+    # 1 H-Resample + ffill
     hourly = df["fundingRate"].resample("1H").mean().ffill()
     out = pd.DataFrame({"fundingRate": hourly})
+
+    # 1) 8-Stunden Funding-Rate (rollierend)
     out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
 
+    # 2) 7-Tage SMA + Z-Score
     window = SMA_DAYS * 24
     out["sma7d"]   = out["fundingRate_8h"].rolling(window).mean()
-    out["zscore"] = (
+    out["zscore"]  = (
         (out["fundingRate_8h"] - out["sma7d"])
         / out["fundingRate_8h"].rolling(window).std()
     )
-    out["flip"]  = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
-    out["basis"] = np.nan  # Platzhalter für später
+
+    # 3) Flip-Flag (Vorzeichenwechsel)
+    out["flip"] = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
+
+    # 4) Platzhalter für Spot-vs-Futures Basis
+    out["basis"] = np.nan
 
     return out
 
 def process_symbol(symbol: str):
     logger.info(f"=== Verarbeitung {symbol} ===")
+
+    # Inception prüfen
     start = SYMBOL_START.get(symbol)
     if not start:
-        raise ValueError(f"Inception-Datum für {symbol} fehlt")
+        raise ValueError(f"Inception-Datum für {symbol} fehlt.")
 
+    # nur Dateien ab Startmonat
     files = [
         fn for fn in list_files(symbol)
-        if pd.Period(re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})", fn).group(1), "M")
-           >= pd.Period(start, "M")
+        if pd.Period(
+             re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})", fn).group(1),
+             "M"
+           ) >= pd.Period(start, "M")
     ]
     if not files:
         logger.info("Keine CSV-Dateien gefunden – überspringe.")
         return
 
-    out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
 
+    # existierendes Parquet anhängen oder initial schreiben
     if os.path.exists(out_path):
         existing = pd.read_parquet(out_path)
         last_mon = existing.index.max().to_period("M")
         new_files = [
             fn for fn in files
-            if pd.Period(re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})", fn).group(1), "M")
-               > last_mon
+            if pd.Period(
+                 re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})", fn).group(1),
+                 "M"
+               ) > last_mon
         ]
         if not new_files:
             logger.info("Keine neuen Daten – überspringe.")
@@ -90,11 +120,11 @@ def process_symbol(symbol: str):
         merged = pd.concat([existing, df_new]).sort_index()
         merged = merged[~merged.index.duplicated(keep="first")]
         save_parquet(merged, out_path)
-        logger.info(f"An bestehendes Parquet angehängt: {len(df_new)} Zeilen")
+        logger.info(f"Angehängt: {len(df_new)} neue Zeilen.")
     else:
         df_all = compute_features(load_and_concat(files))
         save_parquet(df_all, out_path)
-        logger.info(f"Initiales Parquet geschrieben: {len(df_all)} Zeilen")
+        logger.info(f"Initiales Parquet geschrieben: {len(df_all)} Zeilen.")
 
 if __name__ == "__main__":
     symbol = os.getenv("SYMBOL")
