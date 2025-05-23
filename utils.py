@@ -16,7 +16,7 @@ def init_logger(name: str) -> logging.Logger:
 
 def save_parquet(df: pd.DataFrame, path: str) -> None:
     """
-    Speichert DataFrame als snappy-komprimiertes Parquet.
+    Speichert das DataFrame als snappy-komprimiertes Parquet.
     Legt dabei fehlende Ordner automatisch an.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
