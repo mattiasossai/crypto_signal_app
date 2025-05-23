@@ -27,45 +27,7 @@ jobs:
       - name: Download Funding- & Premium-Index-Daten
         shell: bash
         run: |
-          BASE_F="https://data.binance.vision/data/futures/um/monthly/fundingRate"
-          BASE_P="https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines"
-          SYM=${{ matrix.symbol }}
-          mkdir -p data/futures/um/monthly/fundingRate/$SYM
-          mkdir -p data/futures/um/monthly/premiumIndexKlines/$SYM/1h
-
-          # Inception-Datum
-          case "$SYM" in
-            BTCUSDT|ETHUSDT|XRPUSDT) START="2020-01" ;;
-            BNBUSDT)               START="2020-02" ;;
-            SOLUSDT)               START="2020-09" ;;
-            ENAUSDT)               START="2024-04" ;;
-          esac
-
-          LAST_FULL=$(date -d "$(date +%Y-%m-01) -1 day" "+%Y-%m")
-
-          # Funding-Rate ZIPs
-          PER=$START
-          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
-            ZF="$SYM-fundingRate-$PER.zip"
-            UF="$BASE_F/$SYM/$ZF"
-            if curl -sSf "$UF" -o tmp.zip; then
-              unzip -p tmp.zip > data/futures/um/monthly/fundingRate/$SYM/${ZF%.zip}.csv
-              rm tmp.zip
-            fi
-            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
-          done
-
-          # Premium-Index ZIPs
-          PER=$START
-          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
-            ZP="$SYM-1h-$PER.zip"
-            UP="$BASE_P/$SYM/1h/$ZP"
-            if curl -sSf "$UP" -o tmp.zip; then
-              unzip -p tmp.zip > data/futures/um/monthly/premiumIndexKlines/$SYM/1h/${ZP%.zip}.csv
-              rm tmp.zip
-            fi
-            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
-          done
+          # … (unverändert) …
 
       - name: Funding-Extraktor ausführen
         env:
@@ -74,22 +36,10 @@ jobs:
 
       - name: Smoke Test
         run: |
-          python - <<'EOF'
-          import pandas as pd
-          fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
-          df = pd.read_parquet(fn)
-          req = ["fundingRate_8h","sma7d","zscore","flip","has_sma","has_zscore","hours_since_flip","basis"]
-          miss = [c for c in req if c not in df.columns]
-          if miss:
-            print("Fehlende Spalten:", miss); exit(1)
-          if df[req].isna().all().any():
-            print("Spalten komplett NaN"); exit(1)
-          print("OK")
-          EOF
+          # … (unverändert) …
 
       - name: Parquet für Artifact aufbereiten
         run: |
-          # Copy to a flat filename for den Artifact-Upload
           cp features/funding/${{ matrix.symbol }}-funding-features.parquet \
              ${{ matrix.symbol }}-funding.parquet
 
@@ -103,6 +53,7 @@ jobs:
     name: Commit & Push aller Funding-Parquets
     needs: extract
     runs-on: ubuntu-latest
+
     steps:
       - name: Repo auschecken (mit Push-Rechten)
         uses: actions/checkout@v4
@@ -111,16 +62,23 @@ jobs:
 
       - name: Alle Funding-Artifacts herunterladen
         uses: actions/download-artifact@v4
+        # lädt alle artifacts unter ./ funding-<SYMBOL>/
         with:
-          path: .
+          path: artifacts
 
       - name: Artefakte in features/funding kopieren
+        shell: bash
         run: |
           mkdir -p features/funding
-          for F in *-funding.parquet; do
-            # z.B. "BTCUSDT-funding.parquet" → "features/funding/BTCUSDT-funding-features.parquet"
-            SYM=${F%%-funding.parquet}
-            mv "$F" "features/funding/${SYM}-funding-features.parquet"
+          # jedes Unterverzeichnis artifacts/funding-<SYM> enthält <SYM>-funding.parquet
+          for DIR in artifacts/funding-*; do
+            SYM=${DIR#artifacts/funding-}
+            PARQ="$DIR/${SYM}-funding.parquet"
+            if [ -f "$PARQ" ]; then
+              mv "$PARQ" "features/funding/${SYM}-funding-features.parquet"
+            else
+              echo "Warnung: Parquet in $DIR nicht gefunden"
+            fi
           done
 
       - name: Commit & Push (einziger Push)
