@@ -1,3 +1,4 @@
+# .github/workflows/funding_features.yml
 name: Extract Funding Features
 
 on:
@@ -8,14 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol:       [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
-        start_period: [2020-01,    2020-01,  2020-02,   2020-01,   2020-09,   2024-04]
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
 
     steps:
-      - name: Checkout Repo
+      - name: Repo auschecken
         uses: actions/checkout@v3
         with:
-          persist-credentials: true  # für automatischen Push
+          persist-credentials: true  # erlaubt Push via GITHUB_TOKEN
 
       - name: Python einrichten
         uses: actions/setup-python@v4
@@ -30,25 +30,32 @@ jobs:
         run: |
           BASE="https://data.binance.vision/data/futures/um/monthly/fundingRate"
           SYM=${{ matrix.symbol }}
-          START=${{ matrix.start_period }}
           mkdir -p data/futures/um/monthly/fundingRate/$SYM
+
+          # Inception-Datum je Symbol
+          case "$SYM" in
+            BTCUSDT|ETHUSDT|XRPUSDT) START="2020-01" ;;
+            BNBUSDT)               START="2020-02" ;;
+            SOLUSDT)               START="2020-09" ;;
+            ENAUSDT)               START="2024-04" ;;
+          esac
 
           CUR=$(date +%Y-%m)
           PER=$START
           while [[ "$PER" < "$CUR" ]] || [[ "$PER" == "$CUR" ]]; do
-            ZIP="${SYM}-fundingRate-${PER}.zip"
+            ZIP="$SYM-fundingRate-$PER.zip"
             URL="$BASE/$SYM/$ZIP"
             echo "→ Lade $ZIP"
             if curl -sSf "$URL" -o tmp.zip; then
               unzip -p tmp.zip \
-                > data/futures/um/monthly/fundingRate/$SYM/$ZIP:.csv
+                > data/futures/um/monthly/fundingRate/$SYM/$SYM-fundingRate-$PER.csv
               rm tmp.zip
               echo "   ✅ $PER"
             else
-              echo "   ⚠️ missing $ZIP"
+              echo "   ⚠️ $ZIP fehlt"
               rm -f tmp.zip
             fi
-            PER=$(date -d "${PER}-01 +1 month" "+%Y-%m")
+            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
           done
 
       - name: Funding-Extraktor ausführen
@@ -57,26 +64,29 @@ jobs:
         run: python extract_funding_features.py
 
       - name: Smoke Test
+        shell: bash
         run: |
           python - <<'EOF'
           import pandas as pd
           fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
           df = pd.read_parquet(fn)
-          req = ["fundingRate_8h","sma7d","zscore","flip","basis"]
+          req = ["fundingRate_8h", "sma7d", "zscore", "flip", "basis"]
           miss = [c for c in req if c not in df.columns]
           if miss:
-            print("Fehlende Spalten:", miss); exit(1)
+            print("Fehlende Spalten:", miss)
+            exit(1)
           if df[req].isna().all().any():
-            print("Spalten komplett NaN"); exit(1)
+            print("Spalten komplett NaN")
+            exit(1)
           print("OK")
           EOF
 
-      - name: Commit & Push (konfliktsicher)
+      - name: Commit & Push (konfliktfrei)
         if: success()
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # aus anderen Pipelines bekannt: rebase mit Autostash
           git pull --rebase --autostash
           git add features/funding/${{ matrix.symbol }}-funding-features.parquet
           if ! git diff --cached --quiet; then
