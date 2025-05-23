@@ -40,9 +40,11 @@ jobs:
             ENAUSDT)               START="2024-04" ;;
           esac
 
-          CUR=$(date +%Y-%m)
+          # Ermitteln des letzten vollen Monats (nicht den aktuellen)
+          LAST_FULL=$(date -d "$(date +%Y-%m-01) -1 day" "+%Y-%m")
+
           PER=$START
-          while [[ "$PER" < "$CUR" ]] || [[ "$PER" == "$CUR" ]]; do
+          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
             ZIP="$SYM-fundingRate-$PER.zip"
             URL="$BASE/$SYM/$ZIP"
             echo "→ Lade $ZIP"
