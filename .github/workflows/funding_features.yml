@@ -15,7 +15,7 @@ jobs:
       - name: Repo auschecken
         uses: actions/checkout@v3
         with:
-          persist-credentials: true  # erlaubt Push via GITHUB_TOKEN
+          persist-credentials: true
 
       - name: Python einrichten
         uses: actions/setup-python@v4
@@ -25,14 +25,16 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install -r train/requirements.txt
 
-      - name: Historische Funding-Daten herunterladen
+      - name: Funding- & Premium-Index-Daten herunterladen
         shell: bash
         run: |
-          BASE="https://data.binance.vision/data/futures/um/monthly/fundingRate"
+          BASE_F="https://data.binance.vision/data/futures/um/monthly/fundingRate"
+          BASE_P="https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines"
           SYM=${{ matrix.symbol }}
           mkdir -p data/futures/um/monthly/fundingRate/$SYM
+          mkdir -p data/futures/um/monthly/premiumIndexKlines/$SYM/1h
 
-          # Inception-Datum je Symbol
+          # Inception
           case "$SYM" in
             BTCUSDT|ETHUSDT|XRPUSDT) START="2020-01" ;;
             BNBUSDT)               START="2020-02" ;;
@@ -40,22 +42,31 @@ jobs:
             ENAUSDT)               START="2024-04" ;;
           esac
 
-          # Ermitteln des letzten vollen Monats (nicht den aktuellen)
+          # letzter voller Monat
           LAST_FULL=$(date -d "$(date +%Y-%m-01) -1 day" "+%Y-%m")
 
+          # 1) Funding-Rate ZIPs
           PER=$START
-          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
-            ZIP="$SYM-fundingRate-$PER.zip"
-            URL="$BASE/$SYM/$ZIP"
-            echo "→ Lade $ZIP"
-            if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip \
-                > data/futures/um/monthly/fundingRate/$SYM/$SYM-fundingRate-$PER.csv
+          while [[ "$PER" <= "$LAST_FULL" ]]; do
+            ZF="$SYM-fundingRate-$PER.zip"
+            UF="$BASE_F/$SYM/$ZF"
+            echo "→ Funding $ZF"
+            if curl -sSf "$UF" -o tmp.zip; then
+              unzip -p tmp.zip > data/futures/um/monthly/fundingRate/$SYM/${ZF%.zip}.csv
               rm tmp.zip
-              echo "   ✅ $PER"
-            else
-              echo "   ⚠️ $ZIP fehlt"
-              rm -f tmp.zip
+            fi
+            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
+          done
+
+          # 2) Premium-Index ZIPs
+          PER=$START
+          while [[ "$PER" <= "$LAST_FULL" ]]; do
+            ZP="$SYM-1h-$PER.zip"
+            UP="$BASE_P/$SYM/1h/$ZP"
+            echo "→ Premium $ZP"
+            if curl -sSf "$UP" -o tmp.zip; then
+              unzip -p tmp.zip > data/futures/um/monthly/premiumIndexKlines/$SYM/1h/${ZP%.zip}.csv
+              rm tmp.zip
             fi
             PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
           done
@@ -72,14 +83,13 @@ jobs:
           import pandas as pd
           fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
           df = pd.read_parquet(fn)
-          req = ["fundingRate_8h", "sma7d", "zscore", "flip", "basis"]
+          req = ["fundingRate_8h","sma7d","zscore","flip","basis"]
           miss = [c for c in req if c not in df.columns]
           if miss:
-            print("Fehlende Spalten:", miss)
-            exit(1)
+            print("Fehlende Spalten:", miss); exit(1)
+          # Basis jetzt gefüllt, also darf keine Spalte komplett NaN sein
           if df[req].isna().all().any():
-            print("Spalten komplett NaN")
-            exit(1)
+            print("Spalten komplett NaN"); exit(1)
           print("OK")
           EOF
 
