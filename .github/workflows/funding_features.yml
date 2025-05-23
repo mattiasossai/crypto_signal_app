@@ -1,61 +1,57 @@
-# .github/workflows/funding_features.yml
 name: Extract Funding Features
 
 on:
   workflow_dispatch:
-
-env:
-  BASE_URL: https://data.binance.vision/data/futures/um/monthly/fundingRate
 
 jobs:
   extract:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
-        # jeweils euer Startmonat:
-        start_period: [2020-01, 2020-01, 2020-02, 2020-01, 2020-09, 2024-04]
+        symbol:       [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+        start_period: [2020-01,    2020-01,  2020-02,   2020-01,   2020-09,   2024-04]
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v3
         with:
-          persist-credentials: true
+          persist-credentials: true  # für automatischen Push
 
-      - name: Setup Python
+      - name: Python einrichten
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Abhängigkeiten installieren
         run: pip install -r train/requirements.txt
 
-      - name: Download all historical funding CSVs
+      - name: Historische Funding-Daten herunterladen
         shell: bash
         run: |
-          SYMBOL=${{ matrix.symbol }}
+          BASE="https://data.binance.vision/data/futures/um/monthly/fundingRate"
+          SYM=${{ matrix.symbol }}
           START=${{ matrix.start_period }}
-          mkdir -p data/futures/um/monthly/fundingRate/$SYMBOL
-          # loop von START bis heute (aktueller Monat)
+          mkdir -p data/futures/um/monthly/fundingRate/$SYM
+
           CUR=$(date +%Y-%m)
-          PERIOD=$START
-          while [[ "$PERIOD" < "$CUR" ]] || [[ "$PERIOD" == "$CUR" ]]; do
-            ZIP="${SYMBOL}-fundingRate-${PERIOD}.zip"
-            URL="$BASE_URL/$ZIP"
-            echo "→ Fetching $ZIP"
+          PER=$START
+          while [[ "$PER" < "$CUR" ]] || [[ "$PER" == "$CUR" ]]; do
+            ZIP="${SYM}-fundingRate-${PER}.zip"
+            URL="$BASE/$SYM/$ZIP"
+            echo "→ Lade $ZIP"
             if curl -sSf "$URL" -o tmp.zip; then
-              unzip -p tmp.zip > data/futures/um/monthly/fundingRate/${SYMBOL}/${SYMBOL}-fundingRate-${PERIOD}.csv
+              unzip -p tmp.zip \
+                > data/futures/um/monthly/fundingRate/$SYM/$ZIP:.csv
               rm tmp.zip
-              echo "   ✅ $PERIOD"
+              echo "   ✅ $PER"
             else
               echo "   ⚠️ missing $ZIP"
-              rm -f tmp.zip || true
+              rm -f tmp.zip
             fi
-            # nächsten Monat
-            PERIOD=$(date -d "${PERIOD}-01 +1 month" "+%Y-%m")
+            PER=$(date -d "${PER}-01 +1 month" "+%Y-%m")
           done
 
-      - name: Run Funding Extractor
+      - name: Funding-Extraktor ausführen
         env:
           SYMBOL: ${{ matrix.symbol }}
         run: python extract_funding_features.py
@@ -67,23 +63,25 @@ jobs:
           fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
           df = pd.read_parquet(fn)
           req = ["fundingRate_8h","sma7d","zscore","flip","basis"]
-          missing = [c for c in req if c not in df.columns]
-          if missing:
-            print("Fehlende Spalten:", missing); exit(1)
+          miss = [c for c in req if c not in df.columns]
+          if miss:
+            print("Fehlende Spalten:", miss); exit(1)
           if df[req].isna().all().any():
             print("Spalten komplett NaN"); exit(1)
           print("OK")
           EOF
 
-      - name: Commit & Push funding Parquet
+      - name: Commit & Push (konfliktsicher)
         if: success()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # aus anderen Pipelines bekannt: rebase mit Autostash
+          git pull --rebase --autostash
           git add features/funding/${{ matrix.symbol }}-funding-features.parquet
           if ! git diff --cached --quiet; then
-            git commit -m "chore(funding): update ${ { matrix.symbol } } funding features"
+            git commit -m "chore(funding): update ${{ matrix.symbol }}"
             git push
           else
-            echo "No changes to commit for ${{ matrix.symbol }}"
+            echo "Keine Änderungen für ${{ matrix.symbol }}"
           fi
