@@ -111,9 +111,9 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out["has_sma"]    = out["sma7d"].notna().astype(int)
     out["has_zscore"] = out["zscore"].notna().astype(int)
 
-    # 5) Imputation für ML: sma7d & zscore mit 0 füllen
-    out["sma7d"].fillna(0, inplace=True)
-    out["zscore"].fillna(0, inplace=True)
+    # 5) Imputation für ML: sma7d & zscore mit 0 füllen (keine inplace-Warnung)
+    out["sma7d"]  = out["sma7d"].fillna(0)
+    out["zscore"] = out["zscore"].fillna(0)
 
     # 6) hours_since_flip: Stunden seit letztem flip==1
     out["flip_cumsum"]      = out["flip"].cumsum()
