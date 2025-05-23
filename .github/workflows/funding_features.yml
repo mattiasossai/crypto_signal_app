@@ -93,17 +93,23 @@ jobs:
           print("OK")
           EOF
 
-      - name: Commit & Push (konfliktfrei)
+      - name: Commit & Push (robust)
         if: success()
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase --autostash
+          # Stelle sicher, dass wir alle Remotes refs haben
+          git fetch origin main
+          # Rebase unsere Änderung auf den neuesten main
+          git rebase origin/main
+          # Stage nur unsere Parquet
           git add features/funding/${{ matrix.symbol }}-funding-features.parquet
+          # Commit nur, wenn es wirklich Änderungen gibt
           if ! git diff --cached --quiet; then
             git commit -m "chore(funding): update ${{ matrix.symbol }}"
-            git push
+            # Force-with-lease, damit wir nur unsere eigene Ref überschreiben
+            git push origin HEAD:main --force-with-lease
           else
             echo "Keine Änderungen für ${{ matrix.symbol }}"
           fi
