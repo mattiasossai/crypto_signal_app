@@ -6,6 +6,7 @@ on:
 
 jobs:
   extract:
+    name: Extract ${{ matrix.symbol }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -13,9 +14,7 @@ jobs:
 
     steps:
       - name: Repo auschecken
-        uses: actions/checkout@v3
-        with:
-          persist-credentials: true
+        uses: actions/checkout@v4
 
       - name: Python einrichten
         uses: actions/setup-python@v4
@@ -25,7 +24,7 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install -r train/requirements.txt
 
-      - name: Funding- & Premium-Index-Daten herunterladen
+      - name: Download Funding- & Premium-Index-Daten
         shell: bash
         run: |
           BASE_F="https://data.binance.vision/data/futures/um/monthly/fundingRate"
@@ -34,7 +33,7 @@ jobs:
           mkdir -p data/futures/um/monthly/fundingRate/$SYM
           mkdir -p data/futures/um/monthly/premiumIndexKlines/$SYM/1h
 
-          # Inception
+          # Inception-Datum
           case "$SYM" in
             BTCUSDT|ETHUSDT|XRPUSDT) START="2020-01" ;;
             BNBUSDT)               START="2020-02" ;;
@@ -42,15 +41,13 @@ jobs:
             ENAUSDT)               START="2024-04" ;;
           esac
 
-          # letzter voller Monat
           LAST_FULL=$(date -d "$(date +%Y-%m-01) -1 day" "+%Y-%m")
 
-          # 1) Funding-Rate ZIPs
+          # Funding-Rate ZIPs
           PER=$START
           while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
             ZF="$SYM-fundingRate-$PER.zip"
             UF="$BASE_F/$SYM/$ZF"
-            echo "→ Funding $ZF"
             if curl -sSf "$UF" -o tmp.zip; then
               unzip -p tmp.zip > data/futures/um/monthly/fundingRate/$SYM/${ZF%.zip}.csv
               rm tmp.zip
@@ -58,58 +55,84 @@ jobs:
             PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
           done
 
-          # 2) Premium-Index ZIPs
+          # Premium-Index ZIPs
           PER=$START
           while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
             ZP="$SYM-1h-$PER.zip"
             UP="$BASE_P/$SYM/1h/$ZP"
-            echo "→ Premium $ZP"
             if curl -sSf "$UP" -o tmp.zip; then
               unzip -p tmp.zip > data/futures/um/monthly/premiumIndexKlines/$SYM/1h/${ZP%.zip}.csv
               rm tmp.zip
             fi
             PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
           done
-          
+
       - name: Funding-Extraktor ausführen
         env:
           SYMBOL: ${{ matrix.symbol }}
         run: python extract_funding_features.py
 
       - name: Smoke Test
-        shell: bash
         run: |
           python - <<'EOF'
           import pandas as pd
           fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
           df = pd.read_parquet(fn)
-          req = ["fundingRate_8h","sma7d","zscore","flip","basis"]
+          req = ["fundingRate_8h","sma7d","zscore","flip","has_sma","has_zscore","hours_since_flip","basis"]
           miss = [c for c in req if c not in df.columns]
           if miss:
             print("Fehlende Spalten:", miss); exit(1)
-          # Basis jetzt gefüllt, also darf keine Spalte komplett NaN sein
           if df[req].isna().all().any():
             print("Spalten komplett NaN"); exit(1)
           print("OK")
           EOF
 
-      - name: Commit & Push (robust)
-        if: success()
+      - name: Parquet für Artifact aufbereiten
+        run: |
+          # Copy to a flat filename for den Artifact-Upload
+          cp features/funding/${{ matrix.symbol }}-funding-features.parquet \
+             ${{ matrix.symbol }}-funding.parquet
+
+      - name: Parquet als Artifact hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: funding-${{ matrix.symbol }}
+          path: ${{ matrix.symbol }}-funding.parquet
+
+  push:
+    name: Commit & Push aller Funding-Parquets
+    needs: extract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repo auschecken (mit Push-Rechten)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Alle Funding-Artifacts herunterladen
+        uses: actions/download-artifact@v4
+        with:
+          path: .
+
+      - name: Artefakte in features/funding kopieren
+        run: |
+          mkdir -p features/funding
+          for F in *-funding.parquet; do
+            # z.B. "BTCUSDT-funding.parquet" → "features/funding/BTCUSDT-funding-features.parquet"
+            SYM=${F%%-funding.parquet}
+            mv "$F" "features/funding/${SYM}-funding-features.parquet"
+          done
+
+      - name: Commit & Push (einziger Push)
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Stelle sicher, dass wir alle Remotes refs haben
-          git fetch origin main
-          # Rebase unsere Änderung auf den neuesten main
-          git rebase origin/main
-          # Stage nur unsere Parquet
-          git add features/funding/${{ matrix.symbol }}-funding-features.parquet
-          # Commit nur, wenn es wirklich Änderungen gibt
+          git pull --rebase --autostash
+          git add features/funding/*.parquet
           if ! git diff --cached --quiet; then
-            git commit -m "chore(funding): update ${{ matrix.symbol }}"
-            # Force-with-lease, damit wir nur unsere eigene Ref überschreiben
-            git push origin HEAD:main --force-with-lease
+            git commit -m "chore(funding): update alle Symbole"
+            git push
           else
-            echo "Keine Änderungen für ${{ matrix.symbol }}"
+            echo "Keine Änderungen"
           fi
