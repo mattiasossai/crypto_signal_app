@@ -30,6 +30,7 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
             f"https://data.binance.vision/data/futures/um/daily/"
             f"bookDepth/{symbol}/{zip_name}"
         )
+        print(f"→ FETCH {symbol} {ds}: {url}")
         res = subprocess.run(
             ["curl", "-sSf", url, "-o", zip_path],
             capture_output=True
@@ -40,8 +41,10 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
                 check=True
             )
             os.remove(zip_path)
+            extracted = [f for f in os.listdir(raw_dir) if f.endswith(".csv")]
+            print(f"   ✅ Unzipped → {len(extracted)} CSV(s) in {raw_dir}")
         else:
-            print(f"⚠️  {symbol} {ds}: ZIP nicht gefunden → skip")
+            print(f"   ⚠️  {symbol} {ds}: ZIP nicht gefunden → skip")
 
 # 3) Basis-Features aus Roh-CSV lesen
 def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
@@ -52,18 +55,20 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{ds}.csv")
         if os.path.exists(csv_fp):
             df_raw = pd.read_csv(csv_fp)
+            print(f"   • {symbol} {ds}: eingelesen {len(df_raw)} Zeilen")
             if str(df_raw.columns[0]).isdigit():
                 df_raw.columns = ["timestamp","percentage","depth","notional"]
             df_raw["timestamp"] = pd.to_datetime(
                 df_raw["timestamp"], unit="ms", utc=True, errors="coerce"
             )
             df_raw.set_index("timestamp", inplace=True)
-            # ← hier: boolean mask statt label-slice
             day_start = day
             day_end   = day + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
             sl = df_raw[(df_raw.index >= day_start) & (df_raw.index <= day_end)]
             has_data = not sl.empty
+            print(f"      → Slice {day_start}–{day_end}: {len(sl)} Zeilen")
         else:
+            print(f"   • {symbol} {ds}: keine CSV gefunden")
             sl = pd.DataFrame(
                 columns=["percentage","depth","notional"],
                 index=pd.DatetimeIndex([], tz="UTC"),
@@ -147,7 +152,6 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
 
 # 4) Rolling & Microstructure (30d)
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
-    # roll 7/14/21d, VPIN, then 30d micro
     for w in (7,14,21):
         for base in ("notional_imbalance","depth_imbalance"):
             col = f"{base}_roll_{w}d"
@@ -157,12 +161,11 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
     df["vpin"] = df.notional_imbalance.abs().rolling(window=50,min_periods=1).mean()
 
-    # die 30-Tage Micro-Features
     w = 30
     df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf], np.nan)
-    df["ret"]       = df.mid_price.pct_change().abs().fillna(0)
+    df["ret"]       = df.mid_price.pct_change(fill_method=None).abs().fillna(0)
 
-    # Kyle Lambda
+    # Kyle Lambda (rolling 30d)
     kl = []
     for i in range(len(df)):
         if i < w:
@@ -178,13 +181,13 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"kyle_lambda_roll_{w}d"]     = kl
     df[f"has_kyle_lambda_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
-    # Amihud
+    # Amihud (rolling 30d)
     ai      = df.ret / df.total_notional.replace(0,np.nan)
     roll_ai = ai.rolling(window=w,min_periods=w).mean().fillna(0)
     df[f"amihud_roll_{w}d"]    = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna()
 
-    # Liquidity Slope
+    # Liquidity Slope (rolling 30d)
     ls = []
     for i in range(len(df)):
         if i < w:
@@ -204,7 +207,6 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
 # 5) Main: Resume, Download, Extract, Merge, Cleanup
 def main():
-    # yesterday tz-naive → tz-aware UTC
     yesterday = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
     yesterday_ts = pd.to_datetime(yesterday).tz_localize("UTC")
     today_str    = yesterday_ts.strftime("%Y-%m-%d")
