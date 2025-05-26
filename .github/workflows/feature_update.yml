@@ -2,7 +2,6 @@ name: 🛠️ Update BookDepth Features
 
 on:
   schedule:
-    # täglich um 00:30 UTC
     - cron: "30 0 * * *"
   workflow_dispatch: {}
 
@@ -30,13 +29,16 @@ jobs:
       - name: Smoke-Test bookDepth
         run: |
           for FILE in features/bookDepth/*/*.parquet; do
-            parquet-tools schema "$FILE" \
+            # Schema-Check via inspect
+            parquet-tools inspect "$FILE" \
               | grep -q "notional_imbalance_roll_7d" \
               || (echo "Missing notional_imbalance_roll_7d in $FILE" && exit 1)
-            parquet-tools head "$FILE" \
-              | grep -q "has_notional_imbalance_roll_7d" \
-              || (echo "Missing has_notional_imbalance_roll_7d in $FILE" && exit 1)
-            parquet-tools schema "$FILE" \
+            parquet-tools inspect "$FILE" \
               | grep -q "kyle_lambda" \
               || (echo "Missing kyle_lambda in $FILE" && exit 1)
+            # Header-Check via csv
+            parquet-tools csv "$FILE" \
+              | head -n1 \
+              | grep -q "has_notional_imbalance_roll_7d" \
+              || (echo "Missing has_notional_imbalance_roll_7d in $FILE" && exit 1)
           done
