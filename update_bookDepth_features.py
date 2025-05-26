@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 def compute_bookdepth(df: pd.DataFrame) -> pd.DataFrame:
-    # 0) Alten Index-Überrest entfernen, falls vorhanden
+    # 0) Entferne alten Index-Überrest
     if "__index_level_0__" in df.columns:
         df = df.drop(columns="__index_level_0__")
 
@@ -16,50 +16,54 @@ def compute_bookdepth(df: pd.DataFrame) -> pd.DataFrame:
     )
     df = df.set_index("date").sort_index()
 
-    # 2) Rollierende Imbalances + Flags (7/14/21 Tage)
+    # 2) Rollierende Imbalances + Flags (7 / 14 / 21 Tage)
     for w in (7, 14, 21):
-        # Notional-Imbalance
+        # Notional Imbalance
         col = f"notional_imbalance_roll_{w}d"
         roll = df.notional_imbalance.rolling(window=w, min_periods=w).mean()
-        df[col] = roll.fillna(0)
+        df[col]        = roll.fillna(0)
         df[f"has_{col}"] = roll.notna()
 
-        # Depth-Imbalance
+        # Depth Imbalance
         col2 = f"depth_imbalance_roll_{w}d"
         roll2 = df.depth_imbalance.rolling(window=w, min_periods=w).mean()
-        df[col2] = roll2.fillna(0)
+        df[col2]         = roll2.fillna(0)
         df[f"has_{col2}"] = roll2.notna()
 
-    # 3) Mikrostruktur-Kennzahlen
+    # 3) Mikrostruktur-Metriken
     # 3a) Kyle Lambda
     df["mid_price"] = (df.total_notional / df.total_depth).replace([np.inf, -np.inf], np.nan)
-    X = df.total_notional.diff().dropna().values.reshape(-1, 1)
-    y = df.mid_price.diff().abs().dropna().values
-    df["kyle_lambda"] = LinearRegression().fit(X, y).coef_[0] if len(X) else 0
+    X  = df.total_notional.diff().dropna().values.reshape(-1,1)
+    y  = df.mid_price.diff().abs().dropna().values
+    df["kyle_lambda"] = LinearRegression().fit(X, y).coef_[0] if len(X) >= 2 else 0
 
-    # 3b) Amihud Illiquidity
-    df["ret"] = df.mid_price.pct_change().abs().fillna(0)
+    # 3b) Amihud Illiquidity (kein pad in pct_change)
+    df["ret"]   = df.mid_price.pct_change(fill_method=None).abs().fillna(0)
     df["amihud"] = (df.ret / df.total_notional.replace(0, np.nan)).mean()
 
-    # 3c) VPIN (vereinfachtes Rolling Mean)
-    df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
+    # 3c) VPIN (simple rolling mean of abs imbalance)
+    df["vpin"]  = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
 
-    # 3d) Liquidity Slope
-    X2 = df.rel_depth_1pct.values.reshape(-1, 1)
+    # 3d) Liquidity Slope (only complete pairs)
+    X2 = df.rel_depth_1pct.values.reshape(-1,1)
     y2 = df.spread_pct.values
-    df["liq_slope"] = LinearRegression().fit(X2, y2).coef_[0] if len(X2) else 0
+    mask = (~np.isnan(X2.flatten())) & (~np.isnan(y2))
+    df["liq_slope"] = (
+        LinearRegression().fit(X2[mask], y2[mask]).coef_[0]
+        if mask.sum() >= 2 else
+        0
+    )
 
-    # 4) NaNs auffüllen
+    # 4) Auffüllen aller übrigen NaNs mit 0
     df = df.fillna(0)
 
-    # zurück in Spalten-Format
     return df.reset_index()
 
 def update_file(fn: str):
-    df = pd.read_parquet(fn)
+    df  = pd.read_parquet(fn)
     df2 = compute_bookdepth(df)
     df2.to_parquet(fn)
-    print(f"✅ Updated {fn} with new bookDepth features.")
+    print(f"✅ Updated {fn}")
 
 if __name__ == "__main__":
     for fn in glob.glob("features/bookDepth/*/*.parquet"):
