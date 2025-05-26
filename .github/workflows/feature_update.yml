@@ -9,7 +9,7 @@ jobs:
   update-bookdepth:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -23,10 +23,19 @@ jobs:
       - name: Install dependencies
         run: pip install pandas scikit-learn pyarrow parquet-tools
 
-      - name: List & Update merged BookDepth files
+      - name: Update bookDepth features
+        run: python update_bookDepth_features.py
+
+      - name: List updated columns for merged files
         run: |
-          ls features/bookDepth/*/*_to_*.parquet || true
-          python update_bookDepth_features.py
+          for F in features/bookDepth/*/*_to_*.parquet; do
+            echo "---- $F ----"
+            python - <<EOF
+import pandas as pd
+df = pd.read_parquet("$F")
+print(df.columns.tolist())
+EOF
+          done
 
       - name: Smoke-Test bookDepth
         run: |
