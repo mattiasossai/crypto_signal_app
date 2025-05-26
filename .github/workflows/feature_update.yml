@@ -25,18 +25,13 @@ jobs:
           pip install pandas scikit-learn pyarrow parquet-tools
 
       - name: Update bookDepth features
-        run: |
-          python update_bookDepth_features.py
+        run: python update_bookDepth_features.py
 
       - name: List updated columns for merged files
         run: |
           for F in features/bookDepth/*/*_to_*.parquet; do
             echo "---- $F ----"
-            python - <<EOF
-            import pandas as pd
-            df = pd.read_parquet("$F")
-            print(df.columns.tolist())
-            EOF
+            python -c "import pandas as pd; df = pd.read_parquet('$F'); print(df.columns.tolist())"
           done
 
       - name: Smoke-Test bookDepth
