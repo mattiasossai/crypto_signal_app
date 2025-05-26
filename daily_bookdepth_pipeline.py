@@ -45,7 +45,6 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
 
 # 3) Basis-Features aus Roh-CSV lesen
 def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
-    # start und end sind jetzt beides tz-aware UTC → wir können einfach
     days = pd.date_range(start, end, freq="D")
     rows = []
     for day in days:
@@ -59,7 +58,10 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
                 df_raw["timestamp"], unit="ms", utc=True, errors="coerce"
             )
             df_raw.set_index("timestamp", inplace=True)
-            sl = df_raw[day : day + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)]
+            # ← hier: boolean mask statt label-slice
+            day_start = day
+            day_end   = day + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+            sl = df_raw[(df_raw.index >= day_start) & (df_raw.index <= day_end)]
             has_data = not sl.empty
         else:
             sl = pd.DataFrame(
@@ -145,6 +147,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
 
 # 4) Rolling & Microstructure (30d)
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
+    # roll 7/14/21d, VPIN, then 30d micro
     for w in (7,14,21):
         for base in ("notional_imbalance","depth_imbalance"):
             col = f"{base}_roll_{w}d"
@@ -154,14 +157,15 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
     df["vpin"] = df.notional_imbalance.abs().rolling(window=50,min_periods=1).mean()
 
+    # die 30-Tage Micro-Features
     w = 30
     df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf], np.nan)
     df["ret"]       = df.mid_price.pct_change().abs().fillna(0)
 
-    # Kyle Lambda over rolling 30d
-    kl=[]
+    # Kyle Lambda
+    kl = []
     for i in range(len(df)):
-        if i<w:
+        if i < w:
             kl.append(0)
         else:
             sub = df.iloc[i-w+1:i+1]
@@ -174,16 +178,16 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"kyle_lambda_roll_{w}d"]     = kl
     df[f"has_kyle_lambda_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
-    # Amihud over rolling 30d
-    ai       = df.ret / df.total_notional.replace(0,np.nan)
-    roll_ai  = ai.rolling(window=w,min_periods=w).mean().fillna(0)
+    # Amihud
+    ai      = df.ret / df.total_notional.replace(0,np.nan)
+    roll_ai = ai.rolling(window=w,min_periods=w).mean().fillna(0)
     df[f"amihud_roll_{w}d"]    = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna()
 
-    # Liquidity Slope over rolling 30d
-    ls=[]
+    # Liquidity Slope
+    ls = []
     for i in range(len(df)):
-        if i<w:
+        if i < w:
             ls.append(0)
         else:
             sub = df.iloc[i-w+1:i+1]
@@ -200,9 +204,8 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
 # 5) Main: Resume, Download, Extract, Merge, Cleanup
 def main():
-    # --- HIER IST DER EINZIGE UNTERSCHIED: ---
+    # yesterday tz-naive → tz-aware UTC
     yesterday = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
-    # mache aus tz-naive → tz-aware UTC
     yesterday_ts = pd.to_datetime(yesterday).tz_localize("UTC")
     today_str    = yesterday_ts.strftime("%Y-%m-%d")
 
@@ -210,12 +213,12 @@ def main():
     os.makedirs(base_feat, exist_ok=True)
 
     for symbol, inc in INCEPTION.items():
-        inc_date = pd.to_datetime(inc, utc=True).floor("D")
-        out_dir  = os.path.join(base_feat, symbol)
+        inc_date  = pd.to_datetime(inc, utc=True).floor("D")
+        out_dir   = os.path.join(base_feat, symbol)
         os.makedirs(out_dir, exist_ok=True)
 
-        # Resume logic
-        pattern = os.path.join(out_dir, f"{symbol}-features-*.parquet")
+        # Resume
+        pattern  = os.path.join(out_dir, f"{symbol}-features-*.parquet")
         existing = glob.glob(pattern)
         if existing:
             latest = max(existing, key=lambda f: pd.read_parquet(f).index.max())
@@ -223,11 +226,11 @@ def main():
             if "date" in df_old.columns:
                 df_old["date"] = pd.to_datetime(df_old["date"], utc=True)
                 df_old = df_old.set_index("date").sort_index()
-            start = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
+            start   = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
             out_file = latest
         else:
-            df_old = pd.DataFrame()
-            start = inc_date
+            df_old   = pd.DataFrame()
+            start    = inc_date
             out_file = os.path.join(
                 out_dir,
                 f"{symbol}-features-{start.date()}_to_{today_str}.parquet"
@@ -238,7 +241,7 @@ def main():
             continue
 
         # Download
-        days = pd.date_range(start, yesterday_ts, freq="D")
+        days   = pd.date_range(start, yesterday_ts, freq="D")
         raw_dir = os.path.join("raw/bookDepth", symbol)
         print(f"→ {symbol}: Downloading {len(days)} zips…")
         download_and_unzip(symbol, days, raw_dir)
