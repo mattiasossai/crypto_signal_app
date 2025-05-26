@@ -45,7 +45,8 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
 
 # 3) Basis-Features aus Roh-CSV lesen
 def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
-    days = pd.date_range(start, end, freq="D", tz="UTC")
+    # start und end sind jetzt beides tz-aware UTC → wir können einfach
+    days = pd.date_range(start, end, freq="D")
     rows = []
     for day in days:
         ds = day.strftime("%Y-%m-%d")
@@ -157,10 +158,11 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf], np.nan)
     df["ret"]       = df.mid_price.pct_change().abs().fillna(0)
 
-    # Kyle Lambda
-    kl=[] 
+    # Kyle Lambda over rolling 30d
+    kl=[]
     for i in range(len(df)):
-        if i<w: kl.append(0)
+        if i<w:
+            kl.append(0)
         else:
             sub = df.iloc[i-w+1:i+1]
             dn, dp = sub.total_notional.diff().values, sub.mid_price.diff().abs().values
@@ -172,16 +174,17 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"kyle_lambda_roll_{w}d"]     = kl
     df[f"has_kyle_lambda_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
-    # Amihud
+    # Amihud over rolling 30d
     ai       = df.ret / df.total_notional.replace(0,np.nan)
     roll_ai  = ai.rolling(window=w,min_periods=w).mean().fillna(0)
     df[f"amihud_roll_{w}d"]    = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna()
 
-    # Liquidity Slope
+    # Liquidity Slope over rolling 30d
     ls=[]
     for i in range(len(df)):
-        if i<w: ls.append(0)
+        if i<w:
+            ls.append(0)
         else:
             sub = df.iloc[i-w+1:i+1]
             rd, sp = sub.rel_depth_1pct.values.reshape(-1,1), sub.spread_pct.values
@@ -197,8 +200,12 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
 # 5) Main: Resume, Download, Extract, Merge, Cleanup
 def main():
+    # --- HIER IST DER EINZIGE UNTERSCHIED: ---
     yesterday = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
-    today_str = yesterday.strftime("%Y-%m-%d")
+    # mache aus tz-naive → tz-aware UTC
+    yesterday_ts = pd.to_datetime(yesterday).tz_localize("UTC")
+    today_str    = yesterday_ts.strftime("%Y-%m-%d")
+
     base_feat = "features/bookDepth"
     os.makedirs(base_feat, exist_ok=True)
 
@@ -226,19 +233,18 @@ def main():
                 f"{symbol}-features-{start.date()}_to_{today_str}.parquet"
             )
 
-        if start.date() > yesterday:
+        if start > yesterday_ts:
             print(f"ℹ️ {symbol}: schon aktuell bis {today_str}, skip")
             continue
 
         # Download
-        days = pd.date_range(start, yesterday, freq="D", tz="UTC")
+        days = pd.date_range(start, yesterday_ts, freq="D")
         raw_dir = os.path.join("raw/bookDepth", symbol)
         print(f"→ {symbol}: Downloading {len(days)} zips…")
         download_and_unzip(symbol, days, raw_dir)
 
         # Extract
-        df_new = extract_raw_for_days(symbol, raw_dir, start, pd.to_datetime(yesterday, utc=True))
-        # Cleanup raw
+        df_new = extract_raw_for_days(symbol, raw_dir, start, yesterday_ts)
         shutil.rmtree(raw_dir)
 
         # Merge + Rolling
