@@ -5,6 +5,10 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 def compute_bookdepth(df: pd.DataFrame) -> pd.DataFrame:
+# Alten Index-Überrest entfernen, falls er da ist:
+if "__index_level_0__" in df.columns:
+    df = df.drop(columns="__index_level_0__")
+    
     # 1) Datum → daily index
     df["date"] = pd.to_datetime(df["date"], unit="ms", utc=True).dt.floor("D")
     df = df.set_index("date").sort_index()
