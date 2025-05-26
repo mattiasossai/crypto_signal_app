@@ -1,0 +1,54 @@
+name: 🔀 Merge Feature Parquets
+
+# manuel ausführen, kein Schedule
+on:
+  workflow_dispatch: {}
+
+jobs:
+  merge-aggtrades:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install pandas pyarrow
+
+      - name: Merge aggTrades Parquets
+        run: python merge_aggTrades_features.py
+
+      - name: Commit merged aggTrades
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'features/aggTrades/*/*-features-*.parquet'
+          message: 'chore: merge aggTrades feature Parquets per symbol'
+          author_name: ghactions
+          author_email: actions@github.com
+
+  merge-bookdepth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install pandas pyarrow
+
+      - name: Merge bookDepth Parquets
+        run: python merge_bookDepth_features.py
+
+      - name: Commit merged bookDepth
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'features/bookDepth/*/*-features-*.parquet'
+          message: 'chore: merge bookDepth feature Parquets per symbol'
+          author_name: ghactions
+          author_email: actions@github.com
