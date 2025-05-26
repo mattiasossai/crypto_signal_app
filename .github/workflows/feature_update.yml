@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas scikit-learn pyarrow parquet-tools
+          pip install pandas scikit-learn pyarrow parquet-tools EndBug/add-and-commit
 
       - name: Update bookDepth features
         run: python update_bookDepth_features.py
@@ -47,3 +47,11 @@ jobs:
               | grep -q "kyle_lambda" \
               || (echo "Missing kyle_lambda in $FILE" && exit 1)
           done
+
+      - name: Commit & Push updated Parquets
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'features/bookDepth/**/*.parquet'
+          message: 'chore: bookDepth – rolling & microstructure features'
+          author_name: ghactions
+          author_email: actions@github.com
