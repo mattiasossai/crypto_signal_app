@@ -1,1 +1,44 @@
+name: 🔄 Daily BookDepth
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # täglich 00:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  bookdepth-incremental:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pandas numpy scipy scikit-learn pyarrow requests parquet-tools
+
+      - name: Run full daily BookDepth pipeline
+        run: python daily_bookdepth_pipeline.py
+
+      - name: List columns for sanity check
+        run: |
+          for F in features/bookDepth/*/*.parquet; do
+            echo "---- $F ----"
+            python -c "import pandas as pd; print(pd.read_parquet('$F').columns.tolist())"
+          done
+
+      - name: Commit & Push updated Parquets
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'features/bookDepth/**/*.parquet'
+          message: '♻️ BookDepth daily incremental + rolling features'
+          author_name: ghactions
+          author_email: actions@github.com
 
