@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 import os
 import glob
-import sys
+import shutil
 import datetime
-import io
-import zipfile
-import requests
+import subprocess
 import numpy as np
 import pandas as pd
 from scipy.stats import skew, kurtosis
 from sklearn.linear_model import LinearRegression
 
-# ----------------------------------------
-# 1) Inception-Dates pro Symbol
-# ----------------------------------------
+# 1) Inception-Dates
 INCEPTION = {
     "BTCUSDT": "2023-01-01",
     "ETHUSDT": "2023-01-01",
@@ -23,24 +19,39 @@ INCEPTION = {
     "ENAUSDT": "2024-04-02",
 }
 
-# ----------------------------------------
-# 2) Tages-Aggregation aus Binance Vision
-# ----------------------------------------
-def extract_for_days(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+# 2) Download & Entpacken für eine Liste von Tagen
+def download_and_unzip(symbol: str, days, raw_dir: str):
+    os.makedirs(raw_dir, exist_ok=True)
+    for day in days:
+        ds = day.strftime("%Y-%m-%d")
+        zip_name = f"{symbol}-bookDepth-{ds}.zip"
+        zip_path = os.path.join(raw_dir, zip_name)
+        url = (
+            f"https://data.binance.vision/data/futures/um/daily/"
+            f"bookDepth/{symbol}/{zip_name}"
+        )
+        res = subprocess.run(
+            ["curl", "-sSf", url, "-o", zip_path],
+            capture_output=True
+        )
+        if res.returncode == 0:
+            subprocess.run(
+                ["unzip", "-q", "-o", zip_path, "-d", raw_dir],
+                check=True
+            )
+            os.remove(zip_path)
+        else:
+            print(f"⚠️  {symbol} {ds}: ZIP nicht gefunden → skip")
+
+# 3) Basis-Features aus Roh-CSV lesen
+def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
     days = pd.date_range(start, end, freq="D", tz="UTC")
     rows = []
     for day in days:
         ds = day.strftime("%Y-%m-%d")
-        url = (
-            f"https://data.binance.vision/data/futures/um/daily/"
-            f"bookDepth/{symbol}/{symbol}-bookDepth-{ds}.zip"
-        )
-        try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-            z = zipfile.ZipFile(io.BytesIO(r.content))
-            name = z.namelist()[0]
-            df_raw = pd.read_csv(z.open(name))
+        csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{ds}.csv")
+        if os.path.exists(csv_fp):
+            df_raw = pd.read_csv(csv_fp)
             if str(df_raw.columns[0]).isdigit():
                 df_raw.columns = ["timestamp","percentage","depth","notional"]
             df_raw["timestamp"] = pd.to_datetime(
@@ -49,7 +60,7 @@ def extract_for_days(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.
             df_raw.set_index("timestamp", inplace=True)
             sl = df_raw[day : day + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)]
             has_data = not sl.empty
-        except Exception:
+        else:
             sl = pd.DataFrame(
                 columns=["percentage","depth","notional"],
                 index=pd.DatetimeIndex([], tz="UTC"),
@@ -61,8 +72,10 @@ def extract_for_days(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.
         tot_dep = sl["depth"].sum()
         mask1  = sl["percentage"].abs() <= 1.0
         mask10 = sl["percentage"].abs() <= 10.0
-        n1, d1   = sl.loc[mask1, ["notional","depth"]].sum()
-        n10, d10 = sl.loc[mask10, ["notional","depth"]].sum()
+        n1 = sl.loc[mask1, "notional"].sum()
+        d1 = sl.loc[mask1, "depth"].sum()
+        n10 = sl.loc[mask10, "notional"].sum()
+        d10 = sl.loc[mask10, "depth"].sum()
         rel_n1 = n1 / tot_not if tot_not else np.nan
         rel_d1 = d1 / tot_dep if tot_dep else np.nan
 
@@ -129,87 +142,77 @@ def extract_for_days(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.
     df.index.name = "date"
     return df
 
-# ----------------------------------------
-# 3) Rollierende & Microstructure (30d)
-# ----------------------------------------
+# 4) Rolling & Microstructure (30d)
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
-    # Imbalance-Rolls
-    for w in (7, 14, 21):
+    for w in (7,14,21):
         for base in ("notional_imbalance","depth_imbalance"):
-            col  = f"{base}_roll_{w}d"
+            col = f"{base}_roll_{w}d"
             roll = df[base].rolling(window=w, min_periods=w).mean()
             df[col]          = roll.fillna(0)
             df[f"has_{col}"] = roll.notna()
 
-    # VPIN
-    df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
+    df["vpin"] = df.notional_imbalance.abs().rolling(window=50,min_periods=1).mean()
 
-    # 30d Microstructure
     w = 30
-    df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf],np.nan)
+    df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf], np.nan)
     df["ret"]       = df.mid_price.pct_change().abs().fillna(0)
 
     # Kyle Lambda
-    kl=[]
+    kl=[] 
     for i in range(len(df)):
-        if i < w:
-            kl.append(0)
+        if i<w: kl.append(0)
         else:
             sub = df.iloc[i-w+1:i+1]
-            dn = sub.total_notional.diff().values
-            dp = sub.mid_price.diff().abs().values
+            dn, dp = sub.total_notional.diff().values, sub.mid_price.diff().abs().values
             mask = (~np.isnan(dn)) & (~np.isnan(dp))
-            kl.append(LinearRegression().fit(
-                dn[mask].reshape(-1,1), dp[mask]
-            ).coef_[0] if mask.sum()>=2 else 0)
-    df[f"kyle_lambda_roll_{w}d"]       = kl
-    df[f"has_kyle_lambda_roll_{w}d"]   = [i>=w-1 for i in range(len(df))]
+            kl.append(
+              LinearRegression().fit(dn[mask].reshape(-1,1), dp[mask]).coef_[0]
+              if mask.sum()>=2 else 0
+            )
+    df[f"kyle_lambda_roll_{w}d"]     = kl
+    df[f"has_kyle_lambda_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
     # Amihud
-    ai = df.ret/df.total_notional.replace(0,np.nan)
-    roll_ai = ai.rolling(window=w, min_periods=w).mean().fillna(0)
+    ai       = df.ret / df.total_notional.replace(0,np.nan)
+    roll_ai  = ai.rolling(window=w,min_periods=w).mean().fillna(0)
     df[f"amihud_roll_{w}d"]    = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna()
 
     # Liquidity Slope
     ls=[]
     for i in range(len(df)):
-        if i < w:
-            ls.append(0)
+        if i<w: ls.append(0)
         else:
             sub = df.iloc[i-w+1:i+1]
             rd, sp = sub.rel_depth_1pct.values.reshape(-1,1), sub.spread_pct.values
             mask = (~np.isnan(rd.flatten())) & (~np.isnan(sp))
-            ls.append(LinearRegression().fit(
-                rd[mask], sp[mask]
-            ).coef_[0] if mask.sum()>=2 else 0)
+            ls.append(
+              LinearRegression().fit(rd[mask], sp[mask]).coef_[0]
+              if mask.sum()>=2 else 0
+            )
     df[f"liq_slope_roll_{w}d"]     = ls
     df[f"has_liq_slope_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
     return df.drop(columns=["mid_price","ret"], errors="ignore")
 
-# ----------------------------------------
-# 4) Main: Resume & Write
-# ----------------------------------------
+# 5) Main: Resume, Download, Extract, Merge, Cleanup
 def main():
     yesterday = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
     today_str = yesterday.strftime("%Y-%m-%d")
-
     base_feat = "features/bookDepth"
     os.makedirs(base_feat, exist_ok=True)
 
     for symbol, inc in INCEPTION.items():
-        inc_date   = pd.to_datetime(inc, utc=True).floor("D")
-        out_dir    = os.path.join(base_feat, symbol)
+        inc_date = pd.to_datetime(inc, utc=True).floor("D")
+        out_dir  = os.path.join(base_feat, symbol)
         os.makedirs(out_dir, exist_ok=True)
 
-        # Resume point
+        # Resume logic
         pattern = os.path.join(out_dir, f"{symbol}-features-*.parquet")
-        files   = glob.glob(pattern)
-        if files:
-            latest = max(files, key=lambda f: pd.read_parquet(f).reset_index()["date"].max())
+        existing = glob.glob(pattern)
+        if existing:
+            latest = max(existing, key=lambda f: pd.read_parquet(f).index.max())
             df_old = pd.read_parquet(latest)
-            # ensure date index
             if "date" in df_old.columns:
                 df_old["date"] = pd.to_datetime(df_old["date"], utc=True)
                 df_old = df_old.set_index("date").sort_index()
@@ -224,14 +227,25 @@ def main():
             )
 
         if start.date() > yesterday:
-            print(f"ℹ️ {symbol}: bis {today_str} bereits aktuell → skip")
+            print(f"ℹ️ {symbol}: schon aktuell bis {today_str}, skip")
             continue
 
-        df_new = extract_for_days(symbol, start, pd.to_datetime(yesterday, utc=True))
-        df_all = pd.concat([df_old, df_new]).sort_index()
+        # Download
+        days = pd.date_range(start, yesterday, freq="D", tz="UTC")
+        raw_dir = os.path.join("raw/bookDepth", symbol)
+        print(f"→ {symbol}: Downloading {len(days)} zips…")
+        download_and_unzip(symbol, days, raw_dir)
 
+        # Extract
+        df_new = extract_raw_for_days(symbol, raw_dir, start, pd.to_datetime(yesterday, utc=True))
+        # Cleanup raw
+        shutil.rmtree(raw_dir)
+
+        # Merge + Rolling
+        df_all = pd.concat([df_old, df_new]).sort_index()
         df_upd = add_rolling_micro(df_all)
 
+        # Write
         df_upd.to_parquet(out_file, compression="snappy")
         print(f"✅ {symbol}: aktualisiert bis {today_str}")
 
