@@ -1,47 +1,42 @@
-name: 🛠️ Update Feature-Parquets
+name: 🛠️ Update BookDepth Features
 
 on:
   schedule:
-    # täglich um 00:30 UTC, wenn neue Files da sind
+    # täglich um 00:30 UTC
     - cron: "30 0 * * *"
   workflow_dispatch: {}
 
 jobs:
-  update-aggtrades:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - name: Install Dependencies
-        run: pip install pandas scikit-learn pyarrow parquet-tools
-      - name: Update aggTrades features
-        run: python update_aggTrades_features.py
-      - name: Smoke-Test aggTrades
-        run: |
-          for FILE in features/aggTrades/*/*.parquet; do
-            parquet-tools schema $FILE | grep -q "cvd_4h_max" || exit 1
-            parquet-tools head   $FILE | grep -q "tick_imbalance_pct" || exit 1
-          done
-
   update-bookdepth:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
       - name: Install Dependencies
         run: pip install pandas scikit-learn pyarrow parquet-tools
+
       - name: Update bookDepth features
         run: python update_bookDepth_features.py
+
       - name: Smoke-Test bookDepth
         run: |
           for FILE in features/bookDepth/*/*.parquet; do
-            parquet-tools schema $FILE | grep -q "notional_imbalance_roll_7d" || exit 1
-            parquet-tools head   $FILE | grep -q "has_notional_imbalance_roll_7d" || exit 1
-            parquet-tools schema $FILE | grep -q "kyle_lambda" || exit 1
+            parquet-tools schema "$FILE" \
+              | grep -q "notional_imbalance_roll_7d" \
+              || (echo "Missing notional_imbalance_roll_7d in $FILE" && exit 1)
+            parquet-tools head "$FILE" \
+              | grep -q "has_notional_imbalance_roll_7d" \
+              || (echo "Missing has_notional_imbalance_roll_7d in $FILE" && exit 1)
+            parquet-tools schema "$FILE" \
+              | grep -q "kyle_lambda" \
+              || (echo "Missing kyle_lambda in $FILE" && exit 1)
           done
