@@ -2,7 +2,6 @@ name: 🛠️ Update BookDepth Features
 
 on:
   schedule:
-    # täglich um 00:30 UTC
     - cron: "30 0 * * *"
   workflow_dispatch: {}
 
@@ -10,7 +9,7 @@ jobs:
   update-bookdepth:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
@@ -24,12 +23,14 @@ jobs:
       - name: Install dependencies
         run: pip install pandas scikit-learn pyarrow parquet-tools
 
-      - name: Update bookDepth features
-        run: python update_bookDepth_features.py
+      - name: List & Update merged BookDepth files
+        run: |
+          ls features/bookDepth/*/*_to_*.parquet || true
+          python update_bookDepth_features.py
 
       - name: Smoke-Test bookDepth
         run: |
-          for FILE in features/bookDepth/*/*.parquet; do
+          for FILE in features/bookDepth/*/*_to_*.parquet; do
             parquet-tools inspect "$FILE" \
               | grep -q "notional_imbalance_roll_7d" \
               || (echo "Missing notional_imbalance_roll_7d in $FILE" && exit 1)
