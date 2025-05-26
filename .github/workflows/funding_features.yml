@@ -27,7 +27,52 @@ jobs:
       - name: Download Funding- & Premium-Index-Daten
         shell: bash
         run: |
-          # … (unverändert) …
+          BASE_F="https://data.binance.vision/data/futures/um/monthly/fundingRate"
+          BASE_P="https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines"
+          SYM=${{ matrix.symbol }}
+          mkdir -p data/futures/um/monthly/fundingRate/$SYM
+          mkdir -p data/futures/um/monthly/premiumIndexKlines/$SYM/1h
+
+          # Inception
+          case "$SYM" in
+            BTCUSDT|ETHUSDT|XRPUSDT) START="2020-01" ;;
+            BNBUSDT)               START="2020-02" ;;
+            SOLUSDT)               START="2020-09" ;;
+            ENAUSDT)               START="2024-04" ;;
+          esac
+
+          # letzten vollen Monat ermitteln
+          LAST_FULL=$(date -d "$(date +%Y-%m-01) -1 day" "+%Y-%m")
+
+          # 1) Funding-Rate ZIPs herunterladen
+          PER=$START
+          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
+            ZF="$SYM-fundingRate-$PER.zip"
+            UF="$BASE_F/$SYM/$ZF"
+            echo "→ Funding $ZF"
+            if curl -sSf "$UF" -o tmp.zip; then
+              unzip -p tmp.zip > data/futures/um/monthly/fundingRate/$SYM/${ZF%.zip}.csv
+              rm tmp.zip
+            else
+              echo "   ⚠️ $ZF fehlt"
+            fi
+            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
+          done
+
+          # 2) Premium-Index ZIPs herunterladen
+          PER=$START
+          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
+            ZP="$SYM-1h-$PER.zip"
+            UP="$BASE_P/$SYM/1h/$ZP"
+            echo "→ Premium $ZP"
+            if curl -sSf "$UP" -o tmp.zip; then
+              unzip -p tmp.zip > data/futures/um/monthly/premiumIndexKlines/$SYM/1h/${ZP%.zip}.csv
+              rm tmp.zip
+            else
+              echo "   ⚠️ $ZP fehlt"
+            fi
+            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
+          done
 
       - name: Funding-Extraktor ausführen
         env:
@@ -35,15 +80,35 @@ jobs:
         run: python extract_funding_features.py
 
       - name: Smoke Test
+        shell: bash
         run: |
-          # … (unverändert) …
+          python - <<'EOF'
+          import pandas as pd
+          fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
+          df = pd.read_parquet(fn)
+          req = ["fundingRate_8h","sma7d","zscore","flip","has_sma","has_zscore","hours_since_flip","basis"]
+          miss = [c for c in req if c not in df.columns]
+          if miss:
+            print("Fehlende Spalten:", miss); exit(1)
+          if df[req].isna().all().any():
+            print("Spalten komplett NaN"); exit(1)
+          print("OK")
+          EOF
 
       - name: Parquet für Artifact aufbereiten
+        id: prepare_artifact
         run: |
-          cp features/funding/${{ matrix.symbol }}-funding-features.parquet \
-             ${{ matrix.symbol }}-funding.parquet
+          PARQ="features/funding/${{ matrix.symbol }}-funding-features.parquet"
+          if [ -f "$PARQ" ]; then
+            cp "$PARQ" "${{ matrix.symbol }}-funding.parquet"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Warnung: Parquet für ${{ matrix.symbol }} fehlt – überspringe Upload"
+          fi
 
       - name: Parquet als Artifact hochladen
+        if: steps.prepare_artifact.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: funding-${{ matrix.symbol }}
@@ -62,7 +127,6 @@ jobs:
 
       - name: Alle Funding-Artifacts herunterladen
         uses: actions/download-artifact@v4
-        # lädt alle artifacts unter ./ funding-<SYMBOL>/
         with:
           path: artifacts
 
@@ -70,14 +134,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p features/funding
-          # jedes Unterverzeichnis artifacts/funding-<SYM> enthält <SYM>-funding.parquet
           for DIR in artifacts/funding-*; do
             SYM=${DIR#artifacts/funding-}
             PARQ="$DIR/${SYM}-funding.parquet"
             if [ -f "$PARQ" ]; then
               mv "$PARQ" "features/funding/${SYM}-funding-features.parquet"
-            else
-              echo "Warnung: Parquet in $DIR nicht gefunden"
             fi
           done
 
