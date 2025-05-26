@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas scikit-learn pyarrow parquet-tools EndBug/add-and-commit
+          pip install pandas scikit-learn pyarrow parquet-tools
 
       - name: Update bookDepth features
         run: python update_bookDepth_features.py
