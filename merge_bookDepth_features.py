@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
-import glob, os
+import glob
+import os
 import pandas as pd
+
+def detect_timeseries(df: pd.DataFrame) -> pd.Series:
+    # 1) Direkte Spaltenabfrage
+    if "date" in df.columns:
+        return df["date"]
+    if "timestamp" in df.columns:
+        return df["timestamp"]
+    # 2) Integer-Spalten mit großen Werten (ms-Timestamps > 1e12)
+    int_cols = [c for c in df.columns if pd.api.types.is_integer_dtype(df[c])]
+    for c in int_cols:
+        # prüfen, ob alle Werte > 1e12
+        col = df[c].dropna()
+        if not col.empty and col.gt(1e12).all():
+            return col
+    # 3) Ist der Index schon datetime?
+    if pd.api.types.is_datetime64_any_dtype(df.index.dtype):
+        return pd.Series(df.index.values, index=df.index)
+    raise KeyError("No date-like column found")
 
 def merge_symbol(symbol_dir: str):
     symbol = os.path.basename(symbol_dir)
@@ -10,35 +29,28 @@ def merge_symbol(symbol_dir: str):
         print(f"No files for {symbol}, skipping.")
         return
 
-    dfs = []
+    merged = []
     for f in files:
         df = pd.read_parquet(f)
-        # 1) Flexible Erkennung der Zeit-Spalte
-        if   "date"      in df.columns: ts_col = "date"
-        elif "timestamp" in df.columns: ts_col = "timestamp"
-        else:
-            # nimm erstes int-Feld
-            int_cols = [c for c in df.columns if pd.api.types.is_integer_dtype(df[c])]
-            if not int_cols:
-                raise KeyError(f"No date-like column in {f}")
-            ts_col = int_cols[0]
-        # 2) In datetime konvertieren
-        df["__merge_date"] = pd.to_datetime(df[ts_col], unit="ms", utc=True)
-        dfs.append(df)
+        ts = detect_timeseries(df)
+        # konvertiere in datetime
+        ts = pd.to_datetime(ts, unit="ms", utc=True)
+        df = df.copy()
+        df["__merge_date"] = ts
+        merged.append(df)
 
-    # 3) Concat & Sort
-    big = pd.concat(dfs, ignore_index=True)
+    big = pd.concat(merged, ignore_index=True)
     big = big.drop_duplicates(subset="__merge_date").sort_values("__merge_date")
 
-    # 4) Neuer Date-String & File
+    # Erstelle neuen Dateinamen
     start = big["__merge_date"].min().strftime("%Y-%m-%d")
     end   = big["__merge_date"].max().strftime("%Y-%m-%d")
     out_file = os.path.join(symbol_dir, f"{symbol}-features-{start}_to_{end}.parquet")
 
-    # 5) __merge_date umbenennen & speichern
-    big = big.rename(columns={"__merge_date": "date"}).drop(columns=[ts_col], errors="ignore")
+    # rename & speichern
+    big = big.rename(columns={"__merge_date": "date"})
     big.to_parquet(out_file)
-    print(f"Merged {len(files)} ➞ {out_file}")
+    print(f"Merged {len(files)} → {out_file}")
 
 if __name__ == "__main__":
     base = "features/bookDepth"
