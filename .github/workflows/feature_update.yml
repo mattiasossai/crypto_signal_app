@@ -2,6 +2,7 @@ name: 🛠️ Update BookDepth Features
 
 on:
   schedule:
+    # täglich um 00:30 UTC
     - cron: "30 0 * * *"
   workflow_dispatch: {}
 
