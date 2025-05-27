@@ -198,7 +198,17 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         if files:
             latest = max(files, key=lambda f: pd.read_parquet(f).index.max())
             df_old = pd.read_parquet(latest)
-            sd = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
+            # ────────────────────────────────────────────────
+            # 1) Stelle sicher, dass der Index datetime+UTC ist
+            if "date" in df_old.columns:
+                df_old["date"] = pd.to_datetime(df_old["date"], utc=True)
+                df_old = df_old.set_index("date").sort_index()
+                else:
+                    df_old.index = pd.to_datetime(df_old.index, utc=True)
+                    df_old = df_old.sort_index()
+                # 2) Jetzt geht Timestamp + Timedelta wieder
+                sd = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
+            # ────────────────────────────────────────────────
             out_file = latest
         else:
             df_old = pd.DataFrame()
