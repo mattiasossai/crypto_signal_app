@@ -13,14 +13,35 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-from utils import init_logger, save_parquet
+# ─── INTEGRIERTE UTILITY-FUNKTIONEN ───────────────────────────────────────────
+
+def init_logger(name: str) -> logging.Logger:
+    """
+    Erzeugt einen einfachen Stream-Logger (INFO-Level).
+    """
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    if not logger.hasHandlers():
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s"))
+        logger.addHandler(h)
+    return logger
+
+def save_parquet(df: pd.DataFrame, path: str) -> None:
+    """
+    Speichert das DataFrame als snappy-komprimiertes Parquet.
+    Legt dabei fehlende Ordner automatisch an.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    df.to_parquet(path, engine="pyarrow", compression="snappy")
+
+# ─── KONFIGURATION ────────────────────────────────────────────────────────────
 
 logger = init_logger("funding_pipeline")
 
-# --- Config ---
-LOCAL_BASE       = "raw/funding"                  # Basis-Verzeichnis für Downloads
-OUTPUT_DIR       = "features/funding"             # Ausgabe-Parquets
-SYMBOL_START     = {                              # Inception-Monate
+LOCAL_BASE       = "raw/funding"
+OUTPUT_DIR       = "features/funding"
+SYMBOL_START     = {
     "BTCUSDT": "2020-01",
     "ETHUSDT": "2020-01",
     "BNBUSDT": "2020-02",
@@ -34,10 +55,12 @@ SMA_DAYS         = 7
 BASE_FUNDING_URL = "https://data.binance.vision/data/futures/um/monthly/fundingRate"
 BASE_PREMIUM_URL = "https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines"
 
+# ─── DOWNLOAD ──────────────────────────────────────────────────────────────────
+
 def download_monthly_data(symbol: str, sd: pd.Timestamp, ed: pd.Timestamp):
     """
     Lade alle monatlichen FundingRate- und PremiumIndexKlines-ZIPs von Binance
-    zwischen sd (inclusive) und ed (inclusive) herunter und entpacke sie nach LOCAL_BASE.
+    zwischen sd (inclusive) und ed (inclusive) herunter und entpacke sie.
     """
     start_m = sd.to_period("M")
     end_m   = ed.to_period("M")
@@ -47,7 +70,7 @@ def download_monthly_data(symbol: str, sd: pd.Timestamp, ed: pd.Timestamp):
     os.makedirs(out_f, exist_ok=True)
     m = start_m
     while m <= end_m:
-        period = str(m)  # z.B. '2020-01'
+        period = str(m)  # 'YYYY-MM'
         zipname = f"{symbol}-fundingRate-{period}.zip"
         url     = f"{BASE_FUNDING_URL}/{symbol}/{zipname}"
         target  = os.path.join(out_f, zipname)
@@ -78,6 +101,8 @@ def download_monthly_data(symbol: str, sd: pd.Timestamp, ed: pd.Timestamp):
             logger.warning(f"{zipname} nicht gefunden")
         m += 1
 
+# ─── DATEN EINLESEN ────────────────────────────────────────────────────────────
+
 def list_local_csvs(symbol: str, kind: str):
     """
     Liste der lokal entpackten CSVs für FundingRate bzw. PremiumIndexKlines.
@@ -87,11 +112,10 @@ def list_local_csvs(symbol: str, kind: str):
     else:  # premiumIndexKlines
         return sorted(glob.glob(f"{LOCAL_BASE}/premiumIndexKlines/{symbol}/1h/{symbol}-1h-*.csv"))
 
-def load_and_concat_funding(symbol: str, sd: pd.Timestamp):
+def load_and_concat_funding(symbol: str, sd: pd.Timestamp) -> pd.DataFrame:
     files = list_local_csvs(symbol, "fundingRate")
     dfs = []
     for fn in files:
-        # nur Perioden >= sd laden
         per = re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})", fn).group(1)
         if pd.Period(per, "M") < sd.to_period("M"):
             continue
@@ -107,7 +131,7 @@ def load_and_concat_funding(symbol: str, sd: pd.Timestamp):
     all_df.index = all_df["fundingtime"]
     return all_df[["fundingrate"]]
 
-def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex):
+def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_local_csvs(symbol, "premiumIndexKlines")
     frames = []
     for fn in files:
@@ -124,6 +148,8 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex):
         frames.append(series)
     all_prem = pd.concat(frames).sort_index().drop_duplicates()
     return all_prem.reindex(idx).ffill()
+
+# ─── FEATURE-BERECHNUNG ────────────────────────────────────────────────────────
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     hourly = fund_df["fundingrate"].resample("1h").mean().ffill()
@@ -143,34 +169,41 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out["basis"] = np.nan
     return out
 
+# ─── MAIN PROCESS ─────────────────────────────────────────────────────────────
+
 def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     logger.info(f"=== Verarbeitung {symbol} ===")
-    # Termine festlegen
+
+    # Bestimme Zeitraum
     if start_date and end_date:
         sd = pd.to_datetime(start_date + "-01").tz_localize("UTC")
-        ed = pd.to_datetime(end_date + "-01").tz_localize("UTC")
+        ed = pd.to_datetime(end_date   + "-01").tz_localize("UTC")
     else:
         inception = SYMBOL_START[symbol]
         sd = pd.to_datetime(inception + "-01").tz_localize("UTC")
         ed = pd.Timestamp.utcnow().normalize().tz_localize("UTC")
-    # Download der Rohdaten
+
+    # Download & Entpacken
     download_monthly_data(symbol, sd, ed)
-    # Einlesen & Features
-    df_f = load_and_concat_funding(symbol, sd)
-    feats = compute_features(df_f)
-    prem  = load_and_concat_premium(symbol, feats.index)
+
+    # Einlesen & Feature-Bildung
+    df_f   = load_and_concat_funding(symbol, sd)
+    feats  = compute_features(df_f)
+    prem   = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
-    # Resume/Append falls Parquet schon existiert
+
+    # Resume/Append alter Daten
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     pattern = f"{OUTPUT_DIR}/{symbol}-funding-features-*.parquet"
-    files = glob.glob(pattern)
+    files   = glob.glob(pattern)
     if files:
         latest = max(files, key=lambda f: pd.read_parquet(f).index.max())
-        old = pd.read_parquet(latest)
+        old    = pd.read_parquet(latest)
         merged = pd.concat([old, feats]).sort_index().drop_duplicates(keep="first")
     else:
         merged = feats
-    # Dynamischer Dateiname anhand realer Daten
+
+    # Dynamischer Dateiname
     real_sd = merged.index.min().date()
     real_ed = merged.index.max().date()
     out_fp  = f"{OUTPUT_DIR}/{symbol}-funding-features-{real_sd}_to_{real_ed}.parquet"
@@ -179,9 +212,9 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--symbol",     required=True, help="z.B. BTCUSDT")
-    p.add_argument("--start-date", default=None, help="YYYY-MM für historisch (optional)")
-    p.add_argument("--end-date",   default=None, help="YYYY-MM für historisch (optional)")
+    p.add_argument("--symbol",     required=True)
+    p.add_argument("--start-date", default=None)
+    p.add_argument("--end-date",   default=None)
     args = p.parse_args()
     process_symbol(args.symbol, args.start_date, args.end_date)
 
