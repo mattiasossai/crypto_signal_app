@@ -198,26 +198,35 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         if files:
             latest = max(files, key=lambda f: pd.read_parquet(f).index.max())
             df_old = pd.read_parquet(latest)
+
             # ────────────────────────────────────────────────
             # 1) Stelle sicher, dass der Index datetime+UTC ist
             if "date" in df_old.columns:
                 df_old["date"] = pd.to_datetime(df_old["date"], utc=True)
                 df_old = df_old.set_index("date").sort_index()
-                else:
-                    df_old.index = pd.to_datetime(df_old.index, utc=True)
-                    df_old = df_old.sort_index()
-                # 2) Jetzt geht Timestamp + Timedelta wieder
-                sd = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
+            else:
+                df_old.index = pd.to_datetime(df_old.index, utc=True)
+                df_old = df_old.sort_index()
+            # 2) Jetzt geht Timestamp + Timedelta wieder
+            sd = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
             # ────────────────────────────────────────────────
+
             out_file = latest
         else:
+            # kein altes File → Inception
             df_old = pd.DataFrame()
             sd = pd.to_datetime(INCEPTION[symbol]).tz_localize("UTC")
-            out_file = os.path.join(out_dir, f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet")
+            out_file = os.path.join(
+                out_dir,
+                f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet"
+            )
     else:
         # historical fresh
         df_old = pd.DataFrame()
-        out_file = os.path.join(out_dir, f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet")
+        out_file = os.path.join(
+            out_dir,
+            f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet"
+        )
 
     if sd.tzinfo is None: sd = sd.tz_localize("UTC")
     if sd > ed:
