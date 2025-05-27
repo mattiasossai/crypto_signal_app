@@ -1,27 +1,17 @@
-name: "📚 BookDepth: Historical & Daily Incremental"
+name: "📚 BookDepth Daily Incremental"
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Mode: 'historical' or 'daily'"
-        required: true
-        default: "daily"
-      start_date:
-        description: "Startdatum (YYYY-MM-DD). Nur für historical."
-        required: false
-      end_date:
-        description: "Enddatum   (YYYY-MM-DD). Nur für historical."
-        required: false
   schedule:
-    # nur daily
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'       # täglich 02:00 UTC
+  workflow_dispatch:
 
 jobs:
   bookdepth:
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 1
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+      max-parallel: 1         # ← hier: nur seriell
 
     steps:
       - name: Checkout
@@ -38,15 +28,14 @@ jobs:
         run: |
           pip install --upgrade pandas numpy scipy scikit-learn pyarrow
 
-      - name: Run BookDepth pipeline (Downloads, Features, Rolling)
+      - name: Run daily pipeline
         run: python daily_bookdepth_pipeline.py
 
-      - name: Commit & Push feature-Files
-        if: github.ref == 'refs/heads/main'
+      - name: Commit & Push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add features/bookDepth/
+          git add features/bookDepth/${{ matrix.symbol }}
           if ! git diff --cached --quiet; then
             git commit -m "♻️ BookDepth daily incremental + rolling features"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
