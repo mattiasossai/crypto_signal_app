@@ -214,7 +214,7 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         # ─── Neu: Inception capping auch für historical ───
         inception = pd.to_datetime(INCEPTION[symbol]).tz_localize("UTC")
         if sd < inception:
-            logger.info(f"{symbol}: historical start {sd.date()} vor Inception {inception.date()}, cappe um.")
+            print(f"{symbol}: historical start {sd.date()} vor Inception {inception.date()}, cappe um.")
             sd = inception
     else:
         # daily/resume logic wie gehabt
