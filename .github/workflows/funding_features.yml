@@ -1,157 +1,66 @@
-# .github/workflows/funding_features.yml
-name: Extract Funding Features
+# .github/workflows/funding-incremental.yml
+name: ♻️ Funding Features Incremental
 
 on:
+  schedule:
+    - cron: '0 2 * * *'           # Täglich um 02:00 UTC
   workflow_dispatch:
+    inputs:
+      start-date:
+        description: 'Startdatum (YYYY-MM-DD), optional'
+        required: false
+      end-date:
+        description: 'Enddatum (YYYY-MM-DD), optional'
+        required: false
 
 jobs:
-  extract:
-    name: Extract ${{ matrix.symbol }}
+  funding_pipeline:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
-
     steps:
-      - name: Repo auschecken
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: Python einrichten
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Abhängigkeiten installieren
-        run: pip install -r train/requirements.txt
-
-      - name: Download Funding- & Premium-Index-Daten
-        shell: bash
+      - name: Install dependencies
         run: |
-          BASE_F="https://data.binance.vision/data/futures/um/monthly/fundingRate"
-          BASE_P="https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines"
-          SYM=${{ matrix.symbol }}
-          mkdir -p data/futures/um/monthly/fundingRate/$SYM
-          mkdir -p data/futures/um/monthly/premiumIndexKlines/$SYM/1h
+          python -m pip install --upgrade pip
+          pip install pandas numpy scikit-learn pyarrow
 
-          # Inception
-          case "$SYM" in
-            BTCUSDT|ETHUSDT|XRPUSDT) START="2020-01" ;;
-            BNBUSDT)               START="2020-02" ;;
-            SOLUSDT)               START="2020-09" ;;
-            ENAUSDT)               START="2024-04" ;;
-          esac
-
-          # letzten vollen Monat ermitteln
-          LAST_FULL=$(date -d "$(date +%Y-%m-01) -1 day" "+%Y-%m")
-
-          # 1) Funding-Rate ZIPs herunterladen
-          PER=$START
-          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
-            ZF="$SYM-fundingRate-$PER.zip"
-            UF="$BASE_F/$SYM/$ZF"
-            echo "→ Funding $ZF"
-            if curl -sSf "$UF" -o tmp.zip; then
-              unzip -p tmp.zip > data/futures/um/monthly/fundingRate/$SYM/${ZF%.zip}.csv
-              rm tmp.zip
-            else
-              echo "   ⚠️ $ZF fehlt"
-            fi
-            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
-          done
-
-          # 2) Premium-Index ZIPs herunterladen
-          PER=$START
-          while [[ "$PER" < "$LAST_FULL" ]] || [[ "$PER" == "$LAST_FULL" ]]; do
-            ZP="$SYM-1h-$PER.zip"
-            UP="$BASE_P/$SYM/1h/$ZP"
-            echo "→ Premium $ZP"
-            if curl -sSf "$UP" -o tmp.zip; then
-              unzip -p tmp.zip > data/futures/um/monthly/premiumIndexKlines/$SYM/1h/${ZP%.zip}.csv
-              rm tmp.zip
-            else
-              echo "   ⚠️ $ZP fehlt"
-            fi
-            PER=$(date -d "$PER-01 +1 month" "+%Y-%m")
-          done
-
-      - name: Funding-Extraktor ausführen
-        env:
-          SYMBOL: ${{ matrix.symbol }}
-        run: python extract_funding_features.py
-
-      - name: Smoke Test
-        shell: bash
+      - name: Run funding pipeline
+        # Übergabe der optionalen Inputs nur, wenn gesetzt
         run: |
-          python - <<'EOF'
-          import pandas as pd
-          fn = f"features/funding/${{ matrix.symbol }}-funding-features.parquet"
-          df = pd.read_parquet(fn)
-          req = ["fundingRate_8h","sma7d","zscore","flip","has_sma","has_zscore","hours_since_flip","basis"]
-          miss = [c for c in req if c not in df.columns]
-          if miss:
-            print("Fehlende Spalten:", miss); exit(1)
-          if df[req].isna().all().any():
-            print("Spalten komplett NaN"); exit(1)
-          print("OK")
-          EOF
-
-      - name: Parquet für Artifact aufbereiten
-        id: prepare_artifact
-        run: |
-          PARQ="features/funding/${{ matrix.symbol }}-funding-features.parquet"
-          if [ -f "$PARQ" ]; then
-            cp "$PARQ" "${{ matrix.symbol }}-funding.parquet"
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Warnung: Parquet für ${{ matrix.symbol }} fehlt – überspringe Upload"
+          CMD="python scripts/daily_funding_pipeline.py --symbol ${{ matrix.symbol }}"
+          if [[ "${{ github.event.inputs.start-date }}" != "" && "${{ github.event.inputs.end-date }}" != "" ]]; then
+            CMD="$CMD --start-date ${{ github.event.inputs.start-date }} --end-date ${{ github.event.inputs.end-date }}"
           fi
+          echo ">> \$CMD"
+          \$CMD
 
-      - name: Parquet als Artifact hochladen
-        if: steps.prepare_artifact.outputs.exists == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: funding-${{ matrix.symbol }}
-          path: ${{ matrix.symbol }}-funding.parquet
-
-  push:
-    name: Commit & Push aller Funding-Parquets
-    needs: extract
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Repo auschecken (mit Push-Rechten)
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-
-      - name: Alle Funding-Artifacts herunterladen
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Artefakte in features/funding kopieren
+      - name: Commit & Push updated Funding-Parquets
         shell: bash
         run: |
-          mkdir -p features/funding
-          for DIR in artifacts/funding-*; do
-            SYM=${DIR#artifacts/funding-}
-            PARQ="$DIR/${SYM}-funding.parquet"
-            if [ -f "$PARQ" ]; then
-              mv "$PARQ" "features/funding/${SYM}-funding-features.parquet"
-            fi
-          done
-
-      - name: Commit & Push (einziger Push)
-        shell: bash
-        run: |
+          SYMBOL=${{ matrix.symbol }}
+          FEAT_PATH="features/funding"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase --autostash
-          git add features/funding/*.parquet
+          git add $FEAT_PATH/${SYMBOL}-funding-features-*.parquet
+
           if ! git diff --cached --quiet; then
-            git commit -m "chore(funding): update alle Symbole"
+            if [[ -n "${{ github.event.inputs.start-date }}" && -n "${{ github.event.inputs.end-date }}" ]]; then
+              MSG="♻️ Funding $SYMBOL historical ${{ github.event.inputs.start-date }}_to_${{ github.event.inputs.end-date }}"
+            else
+              MSG="♻️ Funding $SYMBOL daily $(date -I -d 'yesterday')"
+            fi
+            git commit -m "$MSG"
+            git pull --rebase --autostash
             git push
           else
-            echo "Keine Änderungen"
+            echo "✔️ Keine Änderungen für $SYMBOL"
           fi
