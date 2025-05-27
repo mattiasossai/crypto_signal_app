@@ -40,8 +40,8 @@ jobs:
           if [[ "${{ github.event.inputs.start-date }}" != "" && "${{ github.event.inputs.end-date }}" != "" ]]; then
             CMD="$CMD --start-date ${{ github.event.inputs.start-date }} --end-date ${{ github.event.inputs.end-date }}"
           fi
-          echo ">> \$CMD"
-          \$CMD
+          echo ">> $CMD"
+          $CMD
 
       - name: Commit & Push updated Funding-Parquets
         shell: bash
