@@ -11,7 +11,7 @@ import pandas as pd
 from scipy.stats import skew, kurtosis
 from sklearn.linear_model import LinearRegression
 
-# Anfangsdaten pro Symbol, für Download-Inception
+# Inception-Daten pro Symbol
 INCEPTION = {
     "BTCUSDT": "2023-01-01",
     "ETHUSDT": "2023-01-01",
@@ -23,8 +23,8 @@ INCEPTION = {
 
 def download_day(symbol: str, day, raw_dir: str):
     """
-    Lade die ZIP-Datei für einen einzelnen Tag herunter und entpacke sie.
-    Gibt True zurück, wenn Download erfolgreich war.
+    Lade die ZIP-Datei für einen Tag herunter und entpacke sie.
+    Return True bei Erfolg.
     """
     ds = day.strftime("%Y-%m-%d")
     zip_name = f"{symbol}-bookDepth-{ds}.zip"
@@ -42,8 +42,7 @@ def download_day(symbol: str, day, raw_dir: str):
 
 def download_and_unzip(symbol: str, days, raw_dir: str):
     """
-    Lade alle Tage hintereinander herunter und entpacke sie.
-    Rückgabe: Liste von bools für Erfolg je Tag.
+    Lade alle Tage herunter und entpacke sie.
     """
     os.makedirs(raw_dir, exist_ok=True)
     results = []
@@ -54,20 +53,16 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
 
 def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     """
-    Lese CSV-Datei ein und wandle Timestamps sauber um (epoch-ms oder ISO-String).
-    Slice nur Daten des angegebenen Tages heraus.
-    Gibt DataFrame und has_data (bool) zurück.
+    Lese CSV ein, parse Timestamp (epoch-ms oder ISO-String),
+    slice Daten des Tages, gebe DataFrame und has_data (bool) zurück.
     """
     if not os.path.exists(csv_fp):
-        # Datei fehlt → leeres DataFrame + False
         return pd.DataFrame([], columns=["percentage","depth","notional"], index=pd.DatetimeIndex([], tz="UTC")), False
     
     df_raw = pd.read_csv(csv_fp)
-    # Falls keine Header, benenne Spalten
     if str(df_raw.columns[0]).isdigit():
         df_raw.columns = ["timestamp","percentage","depth","notional"]
     
-    # Unterschiedliche Timestamp-Formate sauber parsen
     if pd.api.types.is_numeric_dtype(df_raw["timestamp"]):
         df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], unit="ms", utc=True, errors="coerce")
     else:
@@ -77,7 +72,6 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     df_raw.sort_index(inplace=True)
     
     next_day = day + pd.Timedelta(days=1)
-    # Slice nur Zeilen des Tages (UTC)
     sl = df_raw.loc[(df_raw.index >= day) & (df_raw.index < next_day)]
     
     print(f"   • {csv_fp}: read {len(df_raw)} rows → sliced {len(sl)}")
@@ -87,8 +81,7 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
 
 def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp):
     """
-    Für alle Tage im Zeitraum rufe parse_csv_to_df auf,
-    berechne alle Tages-Features und aggregiere sie zu einem DataFrame.
+    Für alle Tage im Zeitraum Daten extrahieren und Features berechnen.
     """
     days = pd.date_range(start.normalize(), end.normalize(), freq="D", tz="UTC")
     rows = []
@@ -96,7 +89,6 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{day.strftime('%Y-%m-%d')}.csv")
         sl, has_data = parse_csv_to_df(csv_fp, day)
 
-        # Basisaggregation
         tot_not = sl["notional"].sum()
         tot_dep = sl["depth"].sum()
         m1 = sl["percentage"].abs() <= 1.0
@@ -127,7 +119,6 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "dep_kurt": kurtosis(d, bias=False) if len(d)>1 else np.nan,
         }
 
-        # Segmente nach Tageszeit (UTC)
         seg1 = sl.between_time("00:00","07:59")[["notional","depth"]].sum(min_count=1)
         seg2 = sl.between_time("08:00","15:59")[["notional","depth"]].sum(min_count=1)
         seg3 = sl.between_time("16:00","23:59")[["notional","depth"]].sum(min_count=1)
@@ -158,7 +149,6 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "has_00_08":          not pd.isna(seg1["notional"]),
             "has_08_16":          not pd.isna(seg2["notional"]),
             "has_16_24":          not pd.isna(seg3["notional"]),
-            # Zusätzliche Spalte für has_data, die angibt, ob Tagesdaten vorliegen
             "has_data":           has_data,
         })
 
@@ -168,7 +158,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Berechne rollierende Fenster und Microstructure-Features (VPIN, Kyle-Lambda, Amihud, Liquidity-Slope).
+    Berechnung rollierender Fenster und Microstructure Features.
     """
     for w in (7,14,21):
         for base in ("notional_imbalance","depth_imbalance"):
@@ -214,17 +204,12 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"liq_slope_roll_{w}d"]     = ls
     df[f"has_liq_slope_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
-    # Temporäre Spalten löschen
     return df.drop(columns=["mid_price","ret"], errors="ignore")
 
 def process_symbol(symbol: str, start_date: str, end_date: str):
     """
-    Hauptfunktion:
-    - Ermittle Start/Enddatum (resume von vorhandenem File oder Inception)
-    - Lade Rohdaten herunter und extrahiere Features
-    - Kombiniere alte und neue Features
-    - Berechne rollierende Mikro-Features
-    - Speichere Parquet ab
+    Hauptprozess: Download, Feature-Extraktion, Kombination, Rolling, Parquet speichern
+    mit dynamischer Anpassung des Parquet-Dateinamens anhand tatsächlicher Daten.
     """
     if start_date and end_date:
         sd = pd.to_datetime(start_date).tz_localize("UTC")
@@ -250,14 +235,14 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
                 df_old.index = pd.to_datetime(df_old.index, utc=True)
                 df_old = df_old.sort_index()
             sd = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
-            out_file = latest
+            out_file = latest  # Nur temporär; später wird der Dateiname angepasst
         else:
             df_old = pd.DataFrame()
             sd = pd.to_datetime(INCEPTION[symbol]).tz_localize("UTC")
-            out_file = os.path.join(out_dir, f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet")
+            out_file = None  # Noch kein Dateiname, wird nachher generiert
     else:
         df_old = pd.DataFrame()
-        out_file = os.path.join(out_dir, f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet")
+        out_file = None
 
     if sd.tzinfo is None: sd = sd.tz_localize("UTC")
     if sd > ed:
@@ -275,8 +260,28 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     df_all = pd.concat([df_old, df_new]).sort_index()
     df_upd = add_rolling_micro(df_all)
 
-    df_upd.to_parquet(out_file, compression="snappy")
-    print(f"✅ {symbol}: writ­ten {len(df_upd)} days to {out_file}")
+    # Schreibe temporär mit generischem Namen
+    tmp_out_file = os.path.join(out_dir, f"{symbol}-features-temp.parquet")
+    df_upd.to_parquet(tmp_out_file, compression="snappy")
+
+    # Ermittle tatsächlichen Datenzeitraum aus Index
+    real_sd = df_upd.index.min().date()
+    real_ed = df_upd.index.max().date()
+
+    # Generiere finalen Dateinamen mit echten Daten
+    final_out_file = os.path.join(
+        out_dir,
+        f"{symbol}-features-{real_sd}_to_{real_ed}.parquet"
+    )
+
+    # Entferne alte Datei mit falschem Datum falls vorhanden
+    if os.path.exists(final_out_file):
+        os.remove(final_out_file)
+
+    # Benenne temporäre Datei um
+    os.rename(tmp_out_file, final_out_file)
+
+    print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
 
 def main():
     p = argparse.ArgumentParser()
