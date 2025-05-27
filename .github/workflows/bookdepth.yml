@@ -47,22 +47,24 @@ jobs:
               --symbol "${{ matrix.symbol }}"
           fi
 
-      - name: Commit & Push
-        if: github.ref == 'refs/heads/main'
+      - name: Commit & Push updated BookDepth Parquets
+        shell: bash
         run: |
-          git config user.name  "github-actions[bot]"
+          SYMBOL=${{ matrix.symbol }}
+          FEAT_PATH="features/bookDepth/$SYMBOL"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "features/bookDepth/${{ matrix.symbol }}"
+          git add $FEAT_PATH/*.parquet
+
           if ! git diff --cached --quiet; then
-            MSG="♻️ BookDepth ${{ matrix.symbol }}"
-            if [[ -n "${{ github.event.inputs.start_date }}" ]]; then
-              MSG="$MSG historical ${{ github.event.inputs.start_date }}_to_
-              ${{ github.event.inputs.end_date }}"
+            if [[ -n "${{ github.event.inputs.start-date }}" && -n "${{ github.event.inputs.end-date }}" ]]; then
+              MSG="♻️ BookDepth $SYMBOL historical ${{ github.event.inputs.start-date }}_to_${{ github.event.inputs.end-date }}"
             else
-              MSG="$MSG daily $(date -I -d 'yesterday')"
+              MSG="♻️ BookDepth $SYMBOL daily $(date -I -d 'yesterday')"
             fi
             git commit -m "$MSG"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+            git pull --rebase --autostash
+            git push
           else
-            echo "✔️ Keine Änderungen"
+            echo "✔️ Keine Änderungen für $SYMBOL"
           fi
