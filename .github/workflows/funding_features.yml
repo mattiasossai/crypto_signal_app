@@ -2,14 +2,15 @@ name: ♻️ Funding Features Incremental
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    # Nur am 20. jeden Monats um 02:00 UTC
+    - cron: '0 2 20 * *'
   workflow_dispatch:
     inputs:
       start-date:
-        description: 'Startdatum (YYYY-MM-DD), optional'
+        description: 'Startdatum (YYYY-MM), optional'
         required: false
       end-date:
-        description: 'Enddatum (YYYY-MM-DD), optional'
+        description: 'Enddatum (YYYY-MM), optional'
         required: false
 
 jobs:
