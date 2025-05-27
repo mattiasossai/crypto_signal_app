@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 1       # **nacheinander**, wie gewünscht
+      max-parallel: 1
 
     steps:
       - name: Checkout
@@ -35,15 +35,16 @@ jobs:
         run: |
           pip install --upgrade pandas numpy scipy scikit-learn pyarrow
 
-      - name: Run pipeline
+      - name: Run pipeline for ${{ matrix.symbol }}
         run: |
-          # Wenn beide Inputs übergeben sind, historical; sonst daily
           if [[ -n "${{ github.event.inputs.start_date }}" && -n "${{ github.event.inputs.end_date }}" ]]; then
             python scripts/daily_bookdepth_pipeline.py \
+              --symbol "${{ matrix.symbol }}" \
               --start-date "${{ github.event.inputs.start_date }}" \
               --end-date   "${{ github.event.inputs.end_date }}"
           else
-            python scripts/daily_bookdepth_pipeline.py
+            python scripts/daily_bookdepth_pipeline.py \
+              --symbol "${{ matrix.symbol }}"
           fi
 
       - name: Commit & Push
@@ -51,11 +52,16 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add features/bookDepth/${{ matrix.symbol }}
+          git add "features/bookDepth/${{ matrix.symbol }}"
           if ! git diff --cached --quiet; then
-            git commit -m "♻️ BookDepth ${{ matrix.symbol }} ${
-              { github.event.inputs.start_date:+hist}_${
-              { github.event.inputs.start_date:+${{ github.event.inputs.start_date }}} }"
+            MSG="♻️ BookDepth ${{ matrix.symbol }}"
+            if [[ -n "${{ github.event.inputs.start_date }}" ]]; then
+              MSG="$MSG historical ${{ github.event.inputs.start_date }}_to_
+              ${{ github.event.inputs.end_date }}"
+            else
+              MSG="$MSG daily $(date -I -d 'yesterday')"
+            fi
+            git commit -m "$MSG"
             git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           else
             echo "✔️ Keine Änderungen"
