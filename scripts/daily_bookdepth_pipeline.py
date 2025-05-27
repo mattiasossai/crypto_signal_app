@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import glob
 import shutil
 import datetime
 import subprocess
+
 import numpy as np
 import pandas as pd
 from scipy.stats import skew, kurtosis
 from sklearn.linear_model import LinearRegression
 
-# Symbol‐spezifische Inception‐Daten (tz-aware Strings)
+# 1) Inception‐Dates (tz‐naive strings; wir lokalisieren später)
 INCEPTION = {
     "BTCUSDT": "2023-01-01",
     "ETHUSDT": "2023-01-01",
@@ -27,73 +29,62 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
         zip_path = os.path.join(raw_dir, zip_name)
         url = f"https://data.binance.vision/data/futures/um/daily/bookDepth/{symbol}/{zip_name}"
         print(f"→ FETCH {symbol} {ds}: {url}")
-        res = subprocess.run(["curl", "-sSf", url, "-o", zip_path], capture_output=True)
+        res = subprocess.run(["curl","-sSf",url,"-o",zip_path], capture_output=True)
         if res.returncode == 0:
-            subprocess.run(["unzip", "-q", "-o", zip_path, "-d", raw_dir], check=True)
+            subprocess.run(["unzip","-q","-o",zip_path,"-d",raw_dir], check=True)
             os.remove(zip_path)
         else:
             print(f"   ⚠️  {symbol} {ds}: ZIP nicht gefunden")
 
-def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
-    # Tage als tz-aware Range
+def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
     days = pd.date_range(start.normalize(), end.normalize(), freq="D", tz="UTC")
     rows = []
     for day in days:
         ds = day.strftime("%Y-%m-%d")
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{ds}.csv")
-
         if os.path.exists(csv_fp):
-            df_raw = pd.read_csv(csv_fp)
-            print(f"   • {symbol} {ds}: eingelesen {len(df_raw)} Zeilen")
-            if str(df_raw.columns[0]).isdigit():
-                df_raw.columns = ["timestamp","percentage","depth","notional"]
-            df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"],
-                                                 unit="ms", utc=True, errors="coerce")
-            df_raw.set_index("timestamp", inplace=True)
-            df_raw.sort_index(inplace=True)
-
-            # --- HALBOFFENES INTERVALL statt label-slice ---
+            df = pd.read_csv(csv_fp)
+            if str(df.columns[0]).isdigit():
+                df.columns = ["timestamp","percentage","depth","notional"]
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+            df.set_index("timestamp", inplace=True)
+            df.sort_index(inplace=True)
             next_day = day + pd.Timedelta(days=1)
-            mask = (df_raw.index >= day) & (df_raw.index < next_day)
-            sl = df_raw.loc[mask]
-            print(f"      → Slice: {len(sl)} Zeilen")
+            sl = df.loc[(df.index >= day) & (df.index < next_day)]
             has_data = not sl.empty
         else:
-            print(f"   • {symbol} {ds}: keine CSV")
             sl = pd.DataFrame(columns=["percentage","depth","notional"],
                               index=pd.DatetimeIndex([], tz="UTC"))
             has_data = False
 
-        # --- alles wie gehabt: Aggregationen, Momente, Segmente ---
+        # --- Basis‐Aggregationen ---
         tot_not = sl["notional"].sum()
         tot_dep = sl["depth"].sum()
-        mask1   = sl["percentage"].abs() <= 1.0
-        mask10  = sl["percentage"].abs() <= 10.0
-        n1,   d1   = sl.loc[mask1,"notional"].sum(), sl.loc[mask1,"depth"].sum()
-        n10,  d10  = sl.loc[mask10,"notional"].sum(), sl.loc[mask10,"depth"].sum()
+        m1 = sl["percentage"].abs() <= 1.0
+        m10= sl["percentage"].abs() <= 10.0
+        n1, d1   = sl.loc[m1,"notional"].sum(), sl.loc[m1,"depth"].sum()
+        n10,d10  = sl.loc[m10,"notional"].sum(), sl.loc[m10,"depth"].sum()
         rel_n1 = n1/tot_not if tot_not else np.nan
         rel_d1 = d1/tot_dep if tot_dep else np.nan
-
-        p_min    = sl.loc[sl["percentage"]>0,"percentage"].min() or 0
-        n_max    = sl.loc[sl["percentage"]<0,"percentage"].max() or 0
+        p_min = sl.loc[sl["percentage"]>0,"percentage"].min() or 0
+        n_max = sl.loc[sl["percentage"]<0,"percentage"].max() or 0
         spread_pct = p_min + abs(n_max)
-
         bid_n = sl.loc[sl["percentage"]<0,"notional"].sum()
         ask_n = sl.loc[sl["percentage"]>0,"notional"].sum()
-        imb_n  = (bid_n-ask_n)/tot_not if tot_not else np.nan
+        imb_n = (bid_n-ask_n)/tot_not if tot_not else np.nan
         bid_d = sl.loc[sl["percentage"]<0,"depth"].sum()
         ask_d = sl.loc[sl["percentage"]>0,"depth"].sum()
-        imb_d  = (bid_d-ask_d)/tot_dep if tot_dep else np.nan
+        imb_d = (bid_d-ask_d)/tot_dep if tot_dep else np.nan
 
         n, d = sl["notional"], sl["depth"]
         moments = {
             "not_mean": n.mean(),
             "not_var":  n.var(ddof=0),
-            "not_skew": skew(n, bias=False)   if len(n)>1 else np.nan,
+            "not_skew": skew(n, bias=False) if len(n)>1 else np.nan,
             "not_kurt": kurtosis(n, bias=False) if len(n)>1 else np.nan,
             "dep_mean": d.mean(),
             "dep_var":  d.var(ddof=0),
-            "dep_skew": skew(d, bias=False)   if len(d)>1 else np.nan,
+            "dep_skew": skew(d, bias=False) if len(d)>1 else np.nan,
             "dep_kurt": kurtosis(d, bias=False) if len(d)>1 else np.nan,
         }
 
@@ -134,57 +125,117 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
     return df
 
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
-    # … rollierende und microstructure-Features wie gehabt …
-    # (unverändert)
+    # 7/14/21d Imbalances
+    for w in (7,14,21):
+        for base in ("notional_imbalance","depth_imbalance"):
+            col = f"{base}_roll_{w}d"
+            roll = df[base].rolling(window=w, min_periods=w).mean()
+            df[col]          = roll.fillna(0)
+            df[f"has_{col}"] = roll.notna()
+
+    # VPIN
+    df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
+
+    # 30d Microstructure
+    w = 30
+    df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf],np.nan)
+    df["ret"]       = df.mid_price.pct_change().abs().fillna(0)
+
+    # Kyle‐Lambda
+    kl = []
+    for i in range(len(df)):
+        if i < w:
+            kl.append(0)
+        else:
+            sub = df.iloc[i-w+1:i+1]
+            X = sub.total_notional.diff().values.reshape(-1,1)
+            y = sub.mid_price.diff().abs().values
+            m = (~np.isnan(X.flatten())) & (~np.isnan(y))
+            kl.append(LinearRegression().fit(X[m],y[m]).coef_[0] if m.sum()>=2 else 0)
+    df[f"kyle_lambda_roll_{w}d"]     = kl
+    df[f"has_kyle_lambda_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
+
+    # Amihud
+    ai      = df.ret / df.total_notional.replace(0,np.nan)
+    roll_ai = ai.rolling(window=w, min_periods=w).mean().fillna(0)
+    df[f"amihud_roll_{w}d"]    = roll_ai
+    df[f"has_amihud_roll_{w}d"] = roll_ai.notna()
+
+    # Liquidity‐Slope
+    ls = []
+    for i in range(len(df)):
+        if i < w:
+            ls.append(0)
+        else:
+            sub = df.iloc[i-w+1:i+1]
+            X = sub.rel_depth_1pct.values.reshape(-1,1)
+            y = sub.spread_pct.values
+            m = (~np.isnan(X.flatten())) & (~np.isnan(y))
+            ls.append(LinearRegression().fit(X[m],y[m]).coef_[0] if m.sum()>=2 else 0)
+    df[f"liq_slope_roll_{w}d"]     = ls
+    df[f"has_liq_slope_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
 
     return df.drop(columns=["mid_price","ret"], errors="ignore")
 
-def main():
-    yesterday = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
-    y_ts = pd.to_datetime(yesterday).tz_localize("UTC")
-    y_str = y_ts.strftime("%Y-%m-%d")
+def process_symbol(symbol: str, start_date: str, end_date: str):
+    # a) parse dates
+    if start_date and end_date:
+        sd = pd.to_datetime(start_date).tz_localize("UTC")
+        ed = pd.to_datetime(end_date).tz_localize("UTC")
+    else:
+        y = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
+        sd = None
+        ed = pd.to_datetime(y).tz_localize("UTC")
 
-    base = "features/bookDepth"
-    os.makedirs(base, exist_ok=True)
+    # b) inception/resume logic
+    out_dir = f"features/bookDepth/{symbol}"
+    os.makedirs(out_dir, exist_ok=True)
+    pattern = os.path.join(out_dir, f"{symbol}-features-*.parquet")
+    files = glob.glob(pattern)
 
-    for sym, inc in INCEPTION.items():
-        inc_dt = pd.to_datetime(inc, utc=True).floor("D")
-        outd   = os.path.join(base, sym)
-        os.makedirs(outd, exist_ok=True)
-
-        # Resume
-        pattern = os.path.join(outd, f"{sym}-features-*.parquet")
-        files   = glob.glob(pattern)
+    if sd is None:
+        # daily => resume or inception
         if files:
             latest = max(files, key=lambda f: pd.read_parquet(f).index.max())
             df_old = pd.read_parquet(latest)
-            start  = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
+            sd = (df_old.index.max() + pd.Timedelta(days=1)).normalize()
+            out_file = latest
         else:
             df_old = pd.DataFrame()
-            start  = inc_dt
+            sd = pd.to_datetime(INCEPTION[symbol]).tz_localize("UTC")
+            out_file = os.path.join(out_dir, f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet")
+    else:
+        # historical fresh
+        df_old = pd.DataFrame()
+        out_file = os.path.join(out_dir, f"{symbol}-features-{sd.date()}_to_{ed.date()}.parquet")
 
-        # ensure tz-awareness
-        if start.tzinfo is None:
-            start = start.tz_localize("UTC")
+    if sd.tzinfo is None: sd = sd.tz_localize("UTC")
+    if sd > ed:
+        print(f"ℹ️ {symbol}: nichts zu tun ({sd.date()} > {ed.date()})")
+        return
 
-        if start > y_ts:
-            print(f"ℹ️ {sym}: bis {y_str} aktuell → skip")
-            continue
+    # c) download, extract, rolling, write
+    days = pd.date_range(sd.normalize(), ed.normalize(), freq="D", tz="UTC")
+    rawdir = f"raw/bookDepth/{symbol}"
+    print(f"→ {symbol}: Downloading {len(days)} days…")
+    download_and_unzip(symbol, days, rawdir)
 
-        days   = pd.date_range(start, y_ts, freq="D", tz="UTC")
-        rawdir = os.path.join("raw/bookDepth", sym)
-        print(f"→ {sym}: Downloading {len(days)} days…")
-        download_and_unzip(sym, days, rawdir)
+    df_new = extract_raw_for_days(symbol, rawdir, sd, ed)
+    shutil.rmtree(rawdir)
 
-        df_new = extract_raw_for_days(sym, rawdir, start, y_ts)
-        shutil.rmtree(rawdir)
+    df_all = pd.concat([df_old, df_new]).sort_index()
+    df_upd = add_rolling_micro(df_all)
 
-        df_all = pd.concat([df_old, df_new]).sort_index()
-        df_upd = add_rolling_micro(df_all)
+    df_upd.to_parquet(out_file, compression="snappy")
+    print(f"✅ {symbol}: writ­ten {len(df_upd)} days to {out_file}")
 
-        out_file = latest if files else os.path.join(outd, f"{sym}-features-{start.date()}_to_{y_str}.parquet")
-        df_upd.to_parquet(out_file, compression="snappy")
-        print(f"✅ {sym}: aktualisiert bis {y_str}")
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--symbol",      required=True)
+    p.add_argument("--start-date",  default=None)
+    p.add_argument("--end-date",    default=None)
+    args = p.parse_args()
+    process_symbol(args.symbol, args.start_date, args.end_date)
 
 if __name__ == "__main__":
     main()
