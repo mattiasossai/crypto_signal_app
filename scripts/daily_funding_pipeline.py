@@ -132,20 +132,41 @@ def load_and_concat_funding(symbol: str, sd: pd.Timestamp) -> pd.DataFrame:
     return all_df[["fundingrate"]]
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
+    expected = [
+        "open_time","open","high","low","close","volume",
+        "close_time","quote_volume","count",
+        "taker_buy_volume","taker_buy_quote_volume","ignore"
+    ]
     files = list_local_csvs(symbol, "premiumIndexKlines")
     frames = []
     for fn in files:
         per = re.search(rf"{symbol}-1h-(\d{{4}}-\d{{2}})", fn).group(1)
-        if pd.Period(per, "M") < idx.min().to_period("M"):
+        # sd_period ist tz‐naive
+        if pd.Period(per, "M") < sd.to_period("M").tz_localize(None):
             continue
-        logger.info(f"Lade Premium-CSV {fn}")
+
+        logger.info(f"Lade Premium-Index-CSV {fn}")
+        # 1) Versuch mit Header
         df = pd.read_csv(fn)
         cols = [c.lower() for c in df.columns]
-        cols = [c.replace("opentime","open_time").replace("closetime","close_time") for c in cols]
+        cols = [c.replace("opentime","open_time")
+                  .replace("closetime","close_time") for c in cols]
         df.columns = cols
+
+        # 2) Fallback, falls erwartete Spalten fehlen
+        if not set(expected).issubset(df.columns):
+            df = pd.read_csv(fn, header=None, names=expected)
+
+        # Jetzt muss open_time existieren
+        if "open_time" not in df.columns:
+            raise ValueError(f"{fn}: kann Spalte 'open_time' nicht finden")
+
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
         series = df.set_index("open_time")["close"]
         frames.append(series)
+
+    if not frames:
+        raise ValueError("Keine Premium-Index-Dateien gefunden.")
     all_prem = pd.concat(frames).sort_index().drop_duplicates()
     return all_prem.reindex(idx).ffill()
 
