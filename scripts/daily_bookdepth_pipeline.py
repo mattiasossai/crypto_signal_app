@@ -36,35 +36,36 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
         else:
             print(f"   ⚠️  {symbol} {ds}: ZIP nicht gefunden")
 
-def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
+def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp):
     days = pd.date_range(start.normalize(), end.normalize(), freq="D", tz="UTC")
     rows = []
     for day in days:
         ds     = day.strftime("%Y-%m-%d")
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{ds}.csv")
-
         if os.path.exists(csv_fp):
             df_raw = pd.read_csv(csv_fp)
-
-            # ────────────────────────────────────────────────────
-            # 1) parse timestamp column exactly like the old script
-            if np.issubdtype(df_raw["timestamp"].dtype, np.number):
-                df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], unit="ms", utc=True, errors="coerce")
+            # rename if no header
+            if str(df_raw.columns[0]).isdigit():
+                df_raw.columns = ["timestamp","percentage","depth","notional"]
+            # --- HERE IS THE FIXED CONVERSION BRANCH ---
+            if pd.api.types.is_numeric_dtype(df_raw["timestamp"]):
+                df_raw["timestamp"] = pd.to_datetime(
+                    df_raw["timestamp"], unit="ms", utc=True, errors="coerce"
+                )
             else:
-                df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], utc=True, errors="coerce")
-            # ────────────────────────────────────────────────────
-
+                df_raw["timestamp"] = pd.to_datetime(
+                    df_raw["timestamp"], utc=True, errors="coerce"
+                )
             df_raw.set_index("timestamp", inplace=True)
             df_raw.sort_index(inplace=True)
 
-            # slice by normalization rather than label‐range
-            mask = df_raw.index.normalize() == day.normalize()
-            sl   = df_raw.loc[mask]
+            next_day = day + pd.Timedelta(days=1)
+            sl = df_raw.loc[(df_raw.index >= day) & (df_raw.index < next_day)]
+            print(f"   • {symbol} {ds}: read {len(df_raw)} rows → sliced {len(sl)}")
             has_data = not sl.empty
         else:
-            sl = pd.DataFrame(columns=["percentage","depth","notional"],
-                              index=pd.DatetimeIndex([], tz="UTC"))
-            has_data = False
+            sl, has_data = pd.DataFrame([], columns=["percentage","depth","notional"],
+                                       index=pd.DatetimeIndex([], tz="UTC")), False
             
         # --- Basis‐Aggregationen ---
         tot_not = sl["notional"].sum()
