@@ -3,23 +3,14 @@ name: "📚 BookDepth: Historical & Daily Incremental"
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "Mode: 'historical' oder 'daily'"
-        required: true
-        default: "daily"
-        type: choice
-        options:
-          - daily
-          - historical
       start_date:
-        description: "Startdatum (YYYY-MM-DD), nur für historical"
+        description: "YYYY-MM-DD (optional; only for historical range)"
         required: false
       end_date:
-        description: "Enddatum   (YYYY-MM-DD), nur für historical"
+        description: "YYYY-MM-DD (optional; only for historical range)"
         required: false
-
   schedule:
-    - cron: '0 2 * * *'   # nur für daily
+    - cron: '0 2 * * *'    # täglich 02:00 UTC
 
 jobs:
   bookdepth:
@@ -27,7 +18,7 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 1
+      max-parallel: 1       # **nacheinander**, wie gewünscht
 
     steps:
       - name: Checkout
@@ -46,23 +37,13 @@ jobs:
 
       - name: Run pipeline
         run: |
-          MODE="${{ github.event.inputs.mode }}"
-          SYMBOL="${{ matrix.symbol }}"
-
-          if [ "$MODE" = "historical" ]; then
-            # historischer Bulk-Run
-            SD="${{ github.event.inputs.start_date }}"
-            ED="${{ github.event.inputs.end_date }}"
-            OUT="features/bookDepth/$SYMBOL/${SYMBOL}-features-${SD}_to_${ED}.parquet"
-            python3 extract_bookDepth_features.py \
-              --input-dir raw/bookDepth/$SYMBOL \
-              --start-date "$SD" \
-              --end-date   "$ED" \
-              --output-file "$OUT"
-
+          # Wenn beide Inputs übergeben sind, historical; sonst daily
+          if [[ -n "${{ github.event.inputs.start_date }}" && -n "${{ github.event.inputs.end_date }}" ]]; then
+            python scripts/daily_bookdepth_pipeline.py \
+              --start-date "${{ github.event.inputs.start_date }}" \
+              --end-date   "${{ github.event.inputs.end_date }}"
           else
-            # daily incremental
-            python3 daily_bookdepth_pipeline.py
+            python daily_bookdepth_pipeline.py
           fi
 
       - name: Commit & Push
@@ -70,10 +51,12 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "features/bookDepth/${{ matrix.symbol }}"
+          git add features/bookDepth/${{ matrix.symbol }}
           if ! git diff --cached --quiet; then
-            git commit -m "♻️ BookDepth ${{ matrix.symbol }} ${{ github.event.inputs.mode }}"
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
+            git commit -m "♻️ BookDepth ${{ matrix.symbol }} ${
+              { github.event.inputs.start_date:+hist}_${
+              { github.event.inputs.start_date:+${{ github.event.inputs.start_date }}} }"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           else
             echo "✔️ Keine Änderungen"
           fi
