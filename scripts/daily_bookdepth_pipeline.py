@@ -36,27 +36,37 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
         else:
             print(f"   ⚠️  {symbol} {ds}: ZIP nicht gefunden")
 
-def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
     days = pd.date_range(start.normalize(), end.normalize(), freq="D", tz="UTC")
     rows = []
     for day in days:
-        ds = day.strftime("%Y-%m-%d")
+        ds     = day.strftime("%Y-%m-%d")
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{ds}.csv")
+
         if os.path.exists(csv_fp):
-            df = pd.read_csv(csv_fp)
-            if str(df.columns[0]).isdigit():
-                df.columns = ["timestamp","percentage","depth","notional"]
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
-            df.set_index("timestamp", inplace=True)
-            df.sort_index(inplace=True)
-            next_day = day + pd.Timedelta(days=1)
-            sl = df.loc[(df.index >= day) & (df.index < next_day)]
+            df_raw = pd.read_csv(csv_fp)
+            if str(df_raw.columns[0]).isdigit():
+                df_raw.columns = ["timestamp","percentage","depth","notional"]
+            df_raw["timestamp"] = pd.to_datetime(
+                df_raw["timestamp"], unit="ms", utc=True, errors="coerce"
+            )
+            df_raw.set_index("timestamp", inplace=True)
+            df_raw.sort_index(inplace=True)
+
+            # ───────────────────────────────────────────────────────
+            # NEU: slice nach Datum statt nach Zeitstempel-Range
+            mask = df_raw.index.normalize() == day.normalize()
+            sl   = df_raw.loc[mask]
+            # ───────────────────────────────────────────────────────
+
             has_data = not sl.empty
         else:
-            sl = pd.DataFrame(columns=["percentage","depth","notional"],
-                              index=pd.DatetimeIndex([], tz="UTC"))
+            sl = pd.DataFrame(
+                columns=["percentage","depth","notional"],
+                index=pd.DatetimeIndex([], tz="UTC")
+            )
             has_data = False
-
+            
         # --- Basis‐Aggregationen ---
         tot_not = sl["notional"].sum()
         tot_dep = sl["depth"].sum()
