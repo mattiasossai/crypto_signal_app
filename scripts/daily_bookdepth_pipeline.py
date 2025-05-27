@@ -45,26 +45,25 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
 
         if os.path.exists(csv_fp):
             df_raw = pd.read_csv(csv_fp)
-            if str(df_raw.columns[0]).isdigit():
-                df_raw.columns = ["timestamp","percentage","depth","notional"]
-            df_raw["timestamp"] = pd.to_datetime(
-                df_raw["timestamp"], unit="ms", utc=True, errors="coerce"
-            )
+
+            # ────────────────────────────────────────────────────
+            # 1) parse timestamp column exactly like the old script
+            if np.issubdtype(df_raw["timestamp"].dtype, np.number):
+                df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], unit="ms", utc=True, errors="coerce")
+            else:
+                df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], utc=True, errors="coerce")
+            # ────────────────────────────────────────────────────
+
             df_raw.set_index("timestamp", inplace=True)
             df_raw.sort_index(inplace=True)
 
-            # ───────────────────────────────────────────────────────
-            # NEU: slice nach Datum statt nach Zeitstempel-Range
+            # slice by normalization rather than label‐range
             mask = df_raw.index.normalize() == day.normalize()
             sl   = df_raw.loc[mask]
-            # ───────────────────────────────────────────────────────
-
             has_data = not sl.empty
         else:
-            sl = pd.DataFrame(
-                columns=["percentage","depth","notional"],
-                index=pd.DatetimeIndex([], tz="UTC")
-            )
+            sl = pd.DataFrame(columns=["percentage","depth","notional"],
+                              index=pd.DatetimeIndex([], tz="UTC"))
             has_data = False
             
         # --- Basis‐Aggregationen ---
