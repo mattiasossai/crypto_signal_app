@@ -2,6 +2,7 @@ name: 🛠️ BookDepth Daily Incremental
 
 on:
   schedule:
+    # täglich 02:00 UTC
     - cron: '0 2 * * *'
   workflow_dispatch:
 
@@ -33,7 +34,7 @@ jobs:
           git add features/bookDepth/
           if ! git diff --cached --quiet; then
             git commit -m "♻️ BookDepth daily incremental + rolling features"
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           else
             echo "✔️ Keine Änderungen"
           fi
