@@ -141,33 +141,35 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     frames = []
     for fn in files:
         per = re.search(rf"{symbol}-1h-(\d{{4}}-\d{{2}})", fn).group(1)
-        # sd_period ist tz‐naive
-        if pd.Period(per, "M") < sd.to_period("M").tz_localize(None):
-            continue
-
+        # altes Verhalten: keine sd-Filter, sondern erst reindex
         logger.info(f"Lade Premium-Index-CSV {fn}")
-        # 1) Versuch mit Header
+
+        # Versuch 1: mit Header
         df = pd.read_csv(fn)
         cols = [c.lower() for c in df.columns]
         cols = [c.replace("opentime","open_time")
-                  .replace("closetime","close_time") for c in cols]
+                   .replace("closetime","close_time") for c in cols]
         df.columns = cols
 
-        # 2) Fallback, falls erwartete Spalten fehlen
+        # Fallback bei fehlendem Header
         if not set(expected).issubset(df.columns):
             df = pd.read_csv(fn, header=None, names=expected)
 
-        # Jetzt muss open_time existieren
+        # Jetzt muss open_time da sein
         if "open_time" not in df.columns:
-            raise ValueError(f"{fn}: kann Spalte 'open_time' nicht finden")
+            raise ValueError(f"{fn}: Spalte 'open_time' fehlt")
 
+        # Timestamp konvertieren
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
+
         series = df.set_index("open_time")["close"]
         frames.append(series)
 
     if not frames:
         raise ValueError("Keine Premium-Index-Dateien gefunden.")
+
     all_prem = pd.concat(frames).sort_index().drop_duplicates()
+    # Reindex auf Funding-Zeitstempel und forward‐fill
     return all_prem.reindex(idx).ffill()
 
 # ─── FEATURE-BERECHNUNG ────────────────────────────────────────────────────────
