@@ -1,3 +1,4 @@
+# .github/workflows/bookdepth-incremental.yml
 name: "📚 BookDepth: Historical & Daily Incremental"
 
 on:
@@ -38,83 +39,30 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pandas numpy scipy pyarrow
+          pip install --upgrade pandas numpy scipy scikit-learn pyarrow parquet-tools
 
-      - name: Download raw CSVs
+      - name: Run BookDepth pipeline
+        env:
+          MODE: ${{ github.event.inputs.mode }}
+          START_DATE: ${{ github.event.inputs.start_date }}
+          END_DATE: ${{ github.event.inputs.end_date }}
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          MODE="${{ github.event.inputs.mode }}"
-          if [ "$MODE" = "historical" ]; then
-            SD="${{ github.event.inputs.start_date }}"
-            ED="${{ github.event.inputs.end_date }}"
-          else
-            SD=$(date -I -d 'yesterday')
-            ED=$SD
-          fi
-
-          RAW="raw/bookDepth/$SYMBOL"
-          mkdir -p "$RAW"
-          CUR="$SD"
-
-          # lade für jeden Tag SD..ED
-          while [[ "$CUR" < "$ED" ]] || [[ "$CUR" = "$ED" ]]; do
-            ZIP="$SYMBOL-bookDepth-$CUR.zip"
-            URL="https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP"
-            if curl -sSf "$URL" -o "$ZIP"; then
-              unzip -q -o "$ZIP" -d "$RAW"
-            fi
-            rm -f "$ZIP"
-            CUR=$(date -I -d "$CUR + 1 day")
-          done
-
-      - name: Extract & Append Features
-        run: |
-          SYMBOL=${{ matrix.symbol }}
-          MODE="${{ github.event.inputs.mode }}"
-          INPUT="raw/bookDepth/$SYMBOL"
-
-          if [ "$MODE" = "historical" ]; then
-            OUT="features/bookDepth/$SYMBOL/$SYMBOL-features-${{ github.event.inputs.start_date }}_to_${{ github.event.inputs.end_date }}.parquet"
-            python3 extract_bookDepth_features.py \
-              --input-dir "$INPUT" \
-              --start-date "${{ github.event.inputs.start_date }}" \
-              --end-date   "${{ github.event.inputs.end_date }}" \
-              --output-file "$OUT"
-          else
-            # daily incremental: vorhandenes File updaten
-            LATEST=$(ls features/bookDepth/"$SYMBOL"/"$SYMBOL"-features-*.parquet 2>/dev/null | sort | tail -n1)
-
-            if [ -n "$LATEST" ]; then
-              ST=$(python3 -c "import pandas as pd; df=pd.read_parquet('$LATEST'); print((df.index.max()+pd.Timedelta(days=1)).date().isoformat())")
-            else
-              # Symbol-spezifische Inception
-              case "$SYMBOL" in
-                BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) ST="2023-01-01" ;;
-                XRPUSDT)                         ST="2023-01-06" ;;
-                ENAUSDT)                         ST="2024-04-02" ;;
-              esac
-            fi
-
-            OUT="$LATEST"
-            python3 extract_bookDepth_features.py \
-              --input-dir "$INPUT" \
-              --start-date "$ST" \
-              --end-date "$(date -I -d 'yesterday')" \
-              --output-file "$OUT"
-          fi
-
-      - name: Cleanup
-        run: rm -rf "raw/bookDepth/${{ matrix.symbol }}"
+          # das pipeline-skript übernimmt:
+          #  • Download (raw/bookDepth/<SYM>)
+          #  • Extraktion der Basis-Features
+          #  • Rolling/Micro-Features
+          #  • Append/Resume Logic
+          python daily_bookdepth_pipeline.py
 
       - name: Commit & Push
-        if: github.ref == 'refs/heads/main'
+        if: ${{ github.ref == 'refs/heads/main' }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "features/bookDepth/${{ matrix.symbol }}"
+          git add features/bookDepth/
           if ! git diff --cached --quiet; then
-            git commit -m "♻️ BookDepth ${{ matrix.symbol }} $MODE"
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
+            git commit -m "♻️ BookDepth daily incremental + rolling features"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
           else
             echo "✔️ Keine Änderungen"
           fi
