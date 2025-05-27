@@ -67,7 +67,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
             df_raw.set_index("timestamp", inplace=True)
             df_raw.sort_index(inplace=True)
 
-            # **Label-Slicing exakt wie im alten Skript:**
+            # **Label-Slicing exakt wie im alten Skript** (kein .loc, sondern df[...] → slice_indexer)
             start_of_day = day
             end_of_day   = day + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
             sl = df_raw[start_of_day : end_of_day]
