@@ -1,4 +1,4 @@
-name: "4️⃣📥🛠️ aggTrades Inc. Download & Feat."
+name: "📥🛠️ aggTrades Inc. Download & Feat."
 
 on:
   workflow_dispatch:
@@ -9,8 +9,6 @@ on:
       end_date:
         description: 'Enddatum (YYYY-MM-DD)'
         required: false
-  schedule:
-    - cron: '0 0 * * *'  # täglich 08:55 UTC
 
 jobs:
   download-and-feature:
