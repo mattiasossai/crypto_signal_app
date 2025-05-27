@@ -4,21 +4,17 @@ import os
 import glob
 import gzip
 import re
-import shutil
-import datetime
 import subprocess
 import logging
+import datetime
 
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-# ─── INTEGRIERTE UTILITY-FUNKTIONEN ───────────────────────────────────────────
+# ─── Utility-Funktionen ───────────────────────────────────────────────────────
 
 def init_logger(name: str) -> logging.Logger:
-    """
-    Erzeugt einen einfachen Stream-Logger (INFO-Level).
-    """
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     if not logger.hasHandlers():
@@ -28,14 +24,10 @@ def init_logger(name: str) -> logging.Logger:
     return logger
 
 def save_parquet(df: pd.DataFrame, path: str) -> None:
-    """
-    Speichert das DataFrame als snappy-komprimiertes Parquet.
-    Legt dabei fehlende Ordner automatisch an.
-    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     df.to_parquet(path, engine="pyarrow", compression="snappy")
 
-# ─── KONFIGURATION ────────────────────────────────────────────────────────────
+# ─── Konfiguration ─────────────────────────────────────────────────────────────
 
 logger = init_logger("funding_pipeline")
 
@@ -55,22 +47,16 @@ SMA_DAYS         = 7
 BASE_FUNDING_URL = "https://data.binance.vision/data/futures/um/monthly/fundingRate"
 BASE_PREMIUM_URL = "https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines"
 
-# ─── DOWNLOAD ──────────────────────────────────────────────────────────────────
+# ─── Download-Logik ohne pd.Period, mit Inception-Capping ──────────────────────
 
 def download_monthly_data(symbol: str, sd: pd.Timestamp, ed: pd.Timestamp):
-    """
-    Lade alle monatlichen FundingRate- und PremiumIndexKlines-ZIPs von Binance
-    zwischen sd (inclusive) und ed (inclusive) herunter und entpacke sie.
-    """
-    start_m = sd.to_period("M")
-    end_m   = ed.to_period("M")
+    y, m = sd.year, sd.month
+    ye, me = ed.year, ed.month
 
-    # FundingRate
     out_f = os.path.join(LOCAL_BASE, "fundingRate", symbol)
     os.makedirs(out_f, exist_ok=True)
-    m = start_m
-    while m <= end_m:
-        period = str(m)  # 'YYYY-MM'
+    while (y < ye) or (y == ye and m <= me):
+        period = f"{y:04d}-{m:02d}"
         zipname = f"{symbol}-fundingRate-{period}.zip"
         url     = f"{BASE_FUNDING_URL}/{symbol}/{zipname}"
         target  = os.path.join(out_f, zipname)
@@ -82,13 +68,15 @@ def download_monthly_data(symbol: str, sd: pd.Timestamp, ed: pd.Timestamp):
         else:
             logger.warning(f"{zipname} nicht gefunden")
         m += 1
+        if m > 12:
+            m = 1
+            y += 1
 
-    # PremiumIndexKlines (1h)
     out_p = os.path.join(LOCAL_BASE, "premiumIndexKlines", symbol, "1h")
     os.makedirs(out_p, exist_ok=True)
-    m = start_m
-    while m <= end_m:
-        period = str(m)
+    y, m = sd.year, sd.month
+    while (y < ye) or (y == ye and m <= me):
+        period = f"{y:04d}-{m:02d}"
         zipname = f"{symbol}-1h-{period}.zip"
         url     = f"{BASE_PREMIUM_URL}/{symbol}/1h/{zipname}"
         target  = os.path.join(out_p, zipname)
@@ -100,16 +88,16 @@ def download_monthly_data(symbol: str, sd: pd.Timestamp, ed: pd.Timestamp):
         else:
             logger.warning(f"{zipname} nicht gefunden")
         m += 1
+        if m > 12:
+            m = 1
+            y += 1
 
-# ─── DATEN EINLESEN ────────────────────────────────────────────────────────────
+# ─── CSV-Einlese-Funktionen ────────────────────────────────────────────────────
 
-def list_local_csvs(symbol: str, kind: str):
-    """
-    Liste der lokal entpackten CSVs für FundingRate bzw. PremiumIndexKlines.
-    """
+def list_local_csvs(symbol: str, kind: str) -> list[str]:
     if kind == "fundingRate":
         return sorted(glob.glob(f"{LOCAL_BASE}/fundingRate/{symbol}/{symbol}-fundingRate-*.csv"))
-    else:  # premiumIndexKlines
+    else:
         return sorted(glob.glob(f"{LOCAL_BASE}/premiumIndexKlines/{symbol}/1h/{symbol}-1h-*.csv"))
 
 def load_and_concat_funding(symbol: str, sd: pd.Timestamp) -> pd.DataFrame:
@@ -117,7 +105,8 @@ def load_and_concat_funding(symbol: str, sd: pd.Timestamp) -> pd.DataFrame:
     dfs = []
     for fn in files:
         per = re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})", fn).group(1)
-        if pd.Period(per, "M") < sd.to_period("M"):
+        year, month = map(int, per.split("-"))
+        if (year, month) < (sd.year, sd.month):
             continue
         logger.info(f"Lade Funding-CSV {fn}")
         opener = gzip.open if fn.endswith(".gz") else open
@@ -127,7 +116,10 @@ def load_and_concat_funding(symbol: str, sd: pd.Timestamp) -> pd.DataFrame:
         df["fundingtime"] = pd.to_datetime(df["calc_time"], unit="ms", utc=True, errors="coerce")
         df["fundingrate"] = df["last_funding_rate"]
         dfs.append(df[["fundingtime","fundingrate"]])
-    all_df = pd.concat(dfs, ignore_index=True).sort_values("fundingtime").drop_duplicates("fundingtime")
+    if not dfs:
+        raise ValueError("Keine Funding-Dateien gefunden.")
+    all_df = pd.concat(dfs, ignore_index=True)
+    all_df = all_df.sort_values("fundingtime").drop_duplicates("fundingtime")
     all_df.index = all_df["fundingtime"]
     return all_df[["fundingrate"]]
 
@@ -140,39 +132,23 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_local_csvs(symbol, "premiumIndexKlines")
     frames = []
     for fn in files:
-        per = re.search(rf"{symbol}-1h-(\d{{4}}-\d{{2}})", fn).group(1)
-        # altes Verhalten: keine sd-Filter, sondern erst reindex
         logger.info(f"Lade Premium-Index-CSV {fn}")
-
-        # Versuch 1: mit Header
         df = pd.read_csv(fn)
         cols = [c.lower() for c in df.columns]
-        cols = [c.replace("opentime","open_time")
-                   .replace("closetime","close_time") for c in cols]
+        cols = [c.replace("opentime","open_time").replace("closetime","close_time") for c in cols]
         df.columns = cols
-
-        # Fallback bei fehlendem Header
         if not set(expected).issubset(df.columns):
             df = pd.read_csv(fn, header=None, names=expected)
-
-        # Jetzt muss open_time da sein
         if "open_time" not in df.columns:
             raise ValueError(f"{fn}: Spalte 'open_time' fehlt")
-
-        # Timestamp konvertieren
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
-
-        series = df.set_index("open_time")["close"]
-        frames.append(series)
-
+        frames.append(df.set_index("open_time")["close"])
     if not frames:
         raise ValueError("Keine Premium-Index-Dateien gefunden.")
-
     all_prem = pd.concat(frames).sort_index().drop_duplicates()
-    # Reindex auf Funding-Zeitstempel und forward‐fill
     return all_prem.reindex(idx).ffill()
 
-# ─── FEATURE-BERECHNUNG ────────────────────────────────────────────────────────
+# ─── Feature-Berechnung ───────────────────────────────────────────────────────
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     hourly = fund_df["fundingrate"].resample("1h").mean().ffill()
@@ -184,38 +160,36 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out["flip"] = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
     out["has_sma"]    = out["sma7d"].notna().astype(int)
     out["has_zscore"] = out["zscore"].notna().astype(int)
-    out["sma7d"]      = out["sma7d"].fillna(0)
-    out["zscore"]     = out["zscore"].fillna(0)
+    out["sma7d"]  = out["sma7d"].fillna(0)
+    out["zscore"] = out["zscore"].fillna(0)
     out["flip_cumsum"]      = out["flip"].cumsum()
     out["hours_since_flip"] = out.groupby("flip_cumsum").cumcount()
     out.drop(columns="flip_cumsum", inplace=True)
     out["basis"] = np.nan
     return out
 
-# ─── MAIN PROCESS ─────────────────────────────────────────────────────────────
+# ─── Hauptfunktion ────────────────────────────────────────────────────────────
 
 def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     logger.info(f"=== Verarbeitung {symbol} ===")
 
-    # Bestimme Zeitraum
     if start_date and end_date:
         sd = pd.to_datetime(start_date + "-01").tz_localize("UTC")
         ed = pd.to_datetime(end_date   + "-01").tz_localize("UTC")
     else:
-        inception = SYMBOL_START[symbol]
-        sd = pd.to_datetime(inception + "-01").tz_localize("UTC")
+        sd = None
         ed = pd.Timestamp.utcnow().normalize().tz_localize("UTC")
 
-    # Download & Entpacken
+    inception = pd.to_datetime(SYMBOL_START[symbol] + "-01").tz_localize("UTC")
+    sd = inception if sd is None else max(sd, inception)
+
     download_monthly_data(symbol, sd, ed)
 
-    # Einlesen & Feature-Bildung
-    df_f   = load_and_concat_funding(symbol, sd)
-    feats  = compute_features(df_f)
-    prem   = load_and_concat_premium(symbol, feats.index)
+    df_f  = load_and_concat_funding(symbol, sd)
+    feats = compute_features(df_f)
+    prem  = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # Resume/Append alter Daten
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     pattern = f"{OUTPUT_DIR}/{symbol}-funding-features-*.parquet"
     files   = glob.glob(pattern)
@@ -226,7 +200,6 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     else:
         merged = feats
 
-    # Dynamischer Dateiname
     real_sd = merged.index.min().date()
     real_ed = merged.index.max().date()
     out_fp  = f"{OUTPUT_DIR}/{symbol}-funding-features-{real_sd}_to_{real_ed}.parquet"
@@ -235,9 +208,9 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--symbol",     required=True)
-    p.add_argument("--start-date", default=None)
-    p.add_argument("--end-date",   default=None)
+    p.add_argument("--symbol",     required=True, help="z.B. BTCUSDT")
+    p.add_argument("--start-date", default=None, help="YYYY-MM, optional")
+    p.add_argument("--end-date",   default=None, help="YYYY-MM, optional")
     args = p.parse_args()
     process_symbol(args.symbol, args.start_date, args.end_date)
 
