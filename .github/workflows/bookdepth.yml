@@ -1,59 +1,60 @@
-name: "📚 BookDepth: Historical & Daily Incremental"
+name: ♻️ BookDepth Features Incremental
 
 on:
+  schedule:
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      start_date:
-        description: "YYYY-MM-DD (optional; only for historical range)"
+      start-date:
+        description: 'Startdatum (YYYY-MM-DD), optional'
         required: false
-      end_date:
-        description: "YYYY-MM-DD (optional; only for historical range)"
+      end-date:
+        description: 'Enddatum (YYYY-MM-DD), optional'
         required: false
-  schedule:
-    - cron: '0 2 * * *'    # täglich 02:00 UTC
 
 jobs:
-  bookdepth:
+  bookdepth_pipeline:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
       max-parallel: 1
-
+      
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pandas numpy scipy scikit-learn pyarrow
+          python -m pip install --upgrade pip
+          pip install pandas numpy scikit-learn pyarrow
 
-      - name: Run pipeline for ${{ matrix.symbol }}
+      - name: Run BookDepth pipeline
         run: |
-          if [[ -n "${{ github.event.inputs.start_date }}" && -n "${{ github.event.inputs.end_date }}" ]]; then
-            python scripts/daily_bookdepth_pipeline.py \
-              --symbol      "${{ matrix.symbol }}" \
-              --start-date  "${{ github.event.inputs.start_date }}" \
-              --end-date    "${{ github.event.inputs.end_date }}"
-          else
-            python scripts/daily_bookdepth_pipeline.py \
-              --symbol "${{ matrix.symbol }}"
+          CMD="python scripts/daily_bookdepth_pipeline.py --symbol ${{ matrix.symbol }}"
+          if [[ "${{ github.event.inputs.start-date }}" != "" && "${{ github.event.inputs.end-date }}" != "" ]]; then
+            CMD="$CMD --start-date ${{ github.event.inputs.start-date }} --end-date ${{ github.event.inputs.end-date }}"
           fi
+          echo ">> $CMD"
+          $CMD
+
+      # … hier ggf. Smoke-Test …
 
       - name: Commit & Push updated BookDepth Parquets
         shell: bash
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          FEAT_PATH="features/bookDepth/$SYMBOL"
+          git fetch origin main
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          SYMBOL=${{ matrix.symbol }}
+          FEAT_PATH="features/bookDepth/$SYMBOL"
           git add $FEAT_PATH/*.parquet
 
           if ! git diff --cached --quiet; then
@@ -63,8 +64,8 @@ jobs:
               MSG="♻️ BookDepth $SYMBOL daily $(date -I -d 'yesterday')"
             fi
             git commit -m "$MSG"
-            git pull --rebase --autostash
-            git push
+            git pull --rebase --autostash origin main
+            git push origin HEAD:main
           else
             echo "✔️ Keine Änderungen für $SYMBOL"
           fi
