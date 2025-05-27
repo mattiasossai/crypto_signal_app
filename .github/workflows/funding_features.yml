@@ -1,9 +1,8 @@
-# .github/workflows/funding-incremental.yml
 name: ♻️ Funding Features Incremental
 
 on:
   schedule:
-    - cron: '0 2 * * *'           # Täglich um 02:00 UTC
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       start-date:
@@ -21,7 +20,9 @@ jobs:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,8 +34,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy scikit-learn pyarrow
 
-      - name: Run funding pipeline
-        # Übergabe der optionalen Inputs nur, wenn gesetzt
+      - name: Run Funding pipeline
         run: |
           CMD="python scripts/daily_funding_pipeline.py --symbol ${{ matrix.symbol }}"
           if [[ "${{ github.event.inputs.start-date }}" != "" && "${{ github.event.inputs.end-date }}" != "" ]]; then
@@ -43,13 +43,16 @@ jobs:
           echo ">> $CMD"
           $CMD
 
+      # … hier ggf. Smoke-Test …
+
       - name: Commit & Push updated Funding-Parquets
         shell: bash
         run: |
-          SYMBOL=${{ matrix.symbol }}
-          FEAT_PATH="features/funding"
+          git fetch origin main
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          SYMBOL=${{ matrix.symbol }}
+          FEAT_PATH="features/funding"
           git add $FEAT_PATH/${SYMBOL}-funding-features-*.parquet
 
           if ! git diff --cached --quiet; then
@@ -59,8 +62,8 @@ jobs:
               MSG="♻️ Funding $SYMBOL daily $(date -I -d 'yesterday')"
             fi
             git commit -m "$MSG"
-            git pull --rebase --autostash
-            git push
+            git pull --rebase --autostash origin main
+            git push origin HEAD:main
           else
             echo "✔️ Keine Änderungen für $SYMBOL"
           fi
