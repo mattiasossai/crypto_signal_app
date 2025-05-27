@@ -43,7 +43,7 @@ jobs:
               --start-date "${{ github.event.inputs.start_date }}" \
               --end-date   "${{ github.event.inputs.end_date }}"
           else
-            python daily_bookdepth_pipeline.py
+            python scripts/daily_bookdepth_pipeline.py
           fi
 
       - name: Commit & Push
