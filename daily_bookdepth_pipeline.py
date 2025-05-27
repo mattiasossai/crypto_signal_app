@@ -64,8 +64,11 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start, end) -> pd.DataFrame:
             df_raw.set_index("timestamp", inplace=True)
             # **WICHTIG**: sortieren, sonst greifen .loc-Slices nicht
             df_raw.sort_index(inplace=True)
+            
             end_of_day = day + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-            sl = df_raw.loc[day : end_of_day]
+            mask = (df_raw.index >= day) & (df_raw.index <= end_of_day)
+            sl = df_raw.loc[mask]
+            
             print(f"      → Slice: {len(sl)} Zeilen")
             has_data = not sl.empty
         else:
