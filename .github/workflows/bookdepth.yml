@@ -1,9 +1,25 @@
-name: "📚 BookDepth Daily Incremental"
+name: "📚 BookDepth: Historical & Daily Incremental"
 
 on:
-  schedule:
-    - cron: '0 2 * * *'       # täglich 02:00 UTC
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Mode: 'historical' oder 'daily'"
+        required: true
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - historical
+      start_date:
+        description: "Startdatum (YYYY-MM-DD), nur für historical"
+        required: false
+      end_date:
+        description: "Enddatum   (YYYY-MM-DD), nur für historical"
+        required: false
+
+  schedule:
+    - cron: '0 2 * * *'   # nur für daily
 
 jobs:
   bookdepth:
@@ -11,7 +27,7 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
-      max-parallel: 1         # ← hier: nur seriell
+      max-parallel: 1
 
     steps:
       - name: Checkout
@@ -28,17 +44,36 @@ jobs:
         run: |
           pip install --upgrade pandas numpy scipy scikit-learn pyarrow
 
-      - name: Run daily pipeline
-        run: python daily_bookdepth_pipeline.py
+      - name: Run pipeline
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          SYMBOL="${{ matrix.symbol }}"
+
+          if [ "$MODE" = "historical" ]; then
+            # historischer Bulk-Run
+            SD="${{ github.event.inputs.start_date }}"
+            ED="${{ github.event.inputs.end_date }}"
+            OUT="features/bookDepth/$SYMBOL/${SYMBOL}-features-${SD}_to_${ED}.parquet"
+            python3 extract_bookDepth_features.py \
+              --input-dir raw/bookDepth/$SYMBOL \
+              --start-date "$SD" \
+              --end-date   "$ED" \
+              --output-file "$OUT"
+
+          else
+            # daily incremental
+            python3 daily_bookdepth_pipeline.py
+          fi
 
       - name: Commit & Push
+        if: github.ref == 'refs/heads/main'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add features/bookDepth/${{ matrix.symbol }}
+          git add "features/bookDepth/${{ matrix.symbol }}"
           if ! git diff --cached --quiet; then
-            git commit -m "♻️ BookDepth daily incremental + rolling features"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+            git commit -m "♻️ BookDepth ${{ matrix.symbol }} ${{ github.event.inputs.mode }}"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
           else
             echo "✔️ Keine Änderungen"
           fi
