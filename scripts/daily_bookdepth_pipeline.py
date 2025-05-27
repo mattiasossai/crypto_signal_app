@@ -207,14 +207,17 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["mid_price","ret"], errors="ignore")
 
 def process_symbol(symbol: str, start_date: str, end_date: str):
-    """
-    Hauptprozess: Download, Feature-Extraktion, Kombination, Rolling, Parquet speichern
-    mit dynamischer Anpassung des Parquet-Dateinamens anhand tatsächlicher Daten.
-    """
+    # a) parse dates
     if start_date and end_date:
         sd = pd.to_datetime(start_date).tz_localize("UTC")
         ed = pd.to_datetime(end_date).tz_localize("UTC")
+        # ─── Neu: Inception capping auch für historical ───
+        inception = pd.to_datetime(INCEPTION[symbol]).tz_localize("UTC")
+        if sd < inception:
+            logger.info(f"{symbol}: historical start {sd.date()} vor Inception {inception.date()}, cappe um.")
+            sd = inception
     else:
+        # daily/resume logic wie gehabt
         y = datetime.datetime.utcnow().date() - datetime.timedelta(days=1)
         sd = None
         ed = pd.to_datetime(y).tz_localize("UTC")
