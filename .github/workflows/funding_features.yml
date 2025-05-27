@@ -18,6 +18,8 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, SOLUSDT, ENAUSDT]
+      max-parallel: 1
+        
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
