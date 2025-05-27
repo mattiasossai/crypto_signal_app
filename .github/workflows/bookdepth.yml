@@ -39,9 +39,9 @@ jobs:
         run: |
           if [[ -n "${{ github.event.inputs.start_date }}" && -n "${{ github.event.inputs.end_date }}" ]]; then
             python scripts/daily_bookdepth_pipeline.py \
-              --symbol "${{ matrix.symbol }}" \
-              --start-date "${{ github.event.inputs.start_date }}" \
-              --end-date   "${{ github.event.inputs.end_date }}"
+              --symbol      "${{ matrix.symbol }}" \
+              --start-date  "${{ github.event.inputs.start_date }}" \
+              --end-date    "${{ github.event.inputs.end_date }}"
           else
             python scripts/daily_bookdepth_pipeline.py \
               --symbol "${{ matrix.symbol }}"
