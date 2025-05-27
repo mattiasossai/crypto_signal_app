@@ -8,13 +8,14 @@ on:
         required: true
         default: "daily"
       start_date:
-        description: 'Startdatum (YYYY-MM-DD). Nur für historical.'
+        description: "Startdatum (YYYY-MM-DD). Nur für historical."
         required: false
       end_date:
-        description: 'Enddatum   (YYYY-MM-DD). Nur für historical.'
+        description: "Enddatum   (YYYY-MM-DD). Nur für historical."
         required: false
   schedule:
-    - cron: '0 2 * * *'   # nur daily
+    # Nur für daily
+    - cron: '0 2 * * *'
 
 jobs:
   bookdepth:
@@ -22,14 +23,17 @@ jobs:
     strategy:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, ENAUSDT]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v4
-        with: { python-version: '3.10' }
+        with:
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
@@ -38,73 +42,78 @@ jobs:
       - name: Download raw CSVs
         run: |
           SYMBOL=${{ matrix.symbol }}
-          if [ "${{ github.event.inputs.mode }}" = "historical" ]; then
+          MODE="${{ github.event.inputs.mode }}"
+          if [ "$MODE" = "historical" ]; then
             SD="${{ github.event.inputs.start_date }}"
             ED="${{ github.event.inputs.end_date }}"
           else
             SD=$(date -I -d 'yesterday')
             ED=$SD
           fi
-          RAW=raw/bookDepth/$SYMBOL
-          mkdir -p $RAW
-          CUR=$SD
-          while [[ "$CUR" <= "$ED" ]]; do
-            ZIP="${SYMBOL}-bookDepth-${CUR}.zip"
+
+          RAW="raw/bookDepth/$SYMBOL"
+          mkdir -p "$RAW"
+          CUR="$SD"
+
+          # lade für jeden Tag SD..ED
+          while [[ "$CUR" < "$ED" ]] || [[ "$CUR" = "$ED" ]]; do
+            ZIP="$SYMBOL-bookDepth-$CUR.zip"
             URL="https://data.binance.vision/data/futures/um/daily/bookDepth/$SYMBOL/$ZIP"
-            if curl -sSf $URL -o $ZIP; then
-              unzip -q -o $ZIP -d $RAW
+            if curl -sSf "$URL" -o "$ZIP"; then
+              unzip -q -o "$ZIP" -d "$RAW"
             fi
-            rm -f $ZIP
+            rm -f "$ZIP"
             CUR=$(date -I -d "$CUR + 1 day")
           done
 
       - name: Extract & Append Features
         run: |
           SYMBOL=${{ matrix.symbol }}
-          if [ "${{ github.event.inputs.mode }}" = "historical" ]; then
-            OUT=features/bookDepth/$SYMBOL/$SYMBOL-features-${{ github.event.inputs.start_date }}_to_${{ github.event.inputs.end_date }}.parquet
-            INPUT=raw/bookDepth/$SYMBOL
+          MODE="${{ github.event.inputs.mode }}"
+          INPUT="raw/bookDepth/$SYMBOL"
+
+          if [ "$MODE" = "historical" ]; then
+            OUT="features/bookDepth/$SYMBOL/$SYMBOL-features-${{ github.event.inputs.start_date }}_to_${{ github.event.inputs.end_date }}.parquet"
             python3 extract_bookDepth_features.py \
-              --input-dir $INPUT \
+              --input-dir "$INPUT" \
               --start-date "${{ github.event.inputs.start_date }}" \
               --end-date   "${{ github.event.inputs.end_date }}" \
               --output-file "$OUT"
           else
-            # daily incremental: append in-place
-            LATEST=$(ls features/bookDepth/$SYMBOL/${SYMBOL}-features-*.parquet \
-                      2>/dev/null | sort | tail -n1)
+            # daily incremental: vorhandenes File updaten
+            LATEST=$(ls features/bookDepth/"$SYMBOL"/"$SYMBOL"-features-*.parquet 2>/dev/null | sort | tail -n1)
+
             if [ -n "$LATEST" ]; then
-              ST=$(python3 - <<EOF
-import pandas as pd
-df=pd.read_parquet("$LATEST")
-print((df.index.max()+pd.Timedelta(days=1)).date().isoformat())
-EOF
-)
+              ST=$(python3 -c "import pandas as pd; df=pd.read_parquet('$LATEST'); print((df.index.max()+pd.Timedelta(days=1)).date().isoformat())")
             else
-              ST=$(python3 - <<EOF
-import datetime
-print("${INCEPTION[$SYMBOL]}")
-EOF
-)
+              # Symbol-spezifische Inception
+              case "$SYMBOL" in
+                BTCUSDT|ETHUSDT|BNBUSDT|SOLUSDT) ST="2023-01-01" ;;
+                XRPUSDT)                         ST="2023-01-06" ;;
+                ENAUSDT)                         ST="2024-04-02" ;;
+              esac
             fi
-            OUT=$LATEST
-            INPUT=raw/bookDepth/$SYMBOL
+
+            OUT="$LATEST"
             python3 extract_bookDepth_features.py \
-              --input-dir $INPUT \
+              --input-dir "$INPUT" \
               --start-date "$ST" \
               --end-date "$(date -I -d 'yesterday')" \
               --output-file "$OUT"
           fi
 
       - name: Cleanup
-        run: rm -rf raw/bookDepth/${{ matrix.symbol }}
+        run: rm -rf "raw/bookDepth/${{ matrix.symbol }}"
 
       - name: Commit & Push
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: github.ref == 'refs/heads/main'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add features/bookDepth/${{ matrix.symbol }}
-          git diff --cached --quiet || \
-            (git commit -m "♻️ BookDepth ${{ matrix.symbol }} ${{ github.event.inputs.mode }}" \
-             && git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main)
+          git add "features/bookDepth/${{ matrix.symbol }}"
+          if ! git diff --cached --quiet; then
+            git commit -m "♻️ BookDepth ${{ matrix.symbol }} $MODE"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main
+          else
+            echo "✔️ Keine Änderungen"
+          fi
