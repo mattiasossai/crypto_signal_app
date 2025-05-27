@@ -171,7 +171,7 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
     w = 30
     df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf],np.nan)
-    df["ret"]       = df.mid_price.pct_change().abs().fillna(0)
+    df["ret"] = df.mid_price.pct_change(fill_method=None).abs().fillna(0)
 
     kl = []
     for i in range(len(df)):
