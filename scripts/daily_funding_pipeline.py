@@ -9,7 +9,6 @@ import numpy as np
 import datetime
 import logging
 
-# ── Integrierte Logger- und Speicher-Funktionen (aus utils.py geklont) ──
 def init_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
@@ -19,13 +18,8 @@ def init_logger(name: str) -> logging.Logger:
         logger.addHandler(h)
     return logger
 
-def save_parquet(df: pd.DataFrame, path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    df.to_parquet(path, engine="pyarrow", compression="snappy")
-
 logger = init_logger("funding_pipeline")
 
-# ── Konfiguration ──
 LOCAL_BASE   = "data/futures/um/monthly"
 OUTPUT_DIR   = "features/funding"
 SYMBOL_START = {
@@ -53,31 +47,35 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
         pattern = f"{symbol}-fundingRate-*.csv"
     return sorted(glob.glob(f"{path}/{pattern}"))
 
-def download_and_unzip(symbol: str, kind: str, start: str, end: str):
+def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
+    """Lädt **eine** Monatsdatei (zip) herunter und entpackt sie, falls vorhanden."""
     base_url = "https://data.binance.vision/data/futures/um/monthly"
     out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
     os.makedirs(out_dir, exist_ok=True)
-    curr = pd.Period(start, "M")
-    last = pd.Period(end, "M")
-    while curr <= last:
-        per = curr.strftime("%Y-%m")
-        if kind == "fundingRate":
-            zip_name = f"{symbol}-fundingRate-{per}.zip"
-            url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
-            dst = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
-        else:
-            zip_name = f"{symbol}-1h-{per}.zip"
-            url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
-            dst = f"{out_dir}/{symbol}-1h-{per}.csv"
+    if kind == "fundingRate":
+        zip_name = f"{symbol}-fundingRate-{month}.zip"
+        url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
+        dst = f"{out_dir}/{symbol}-fundingRate-{month}.csv"
+    else:
+        zip_name = f"{symbol}-1h-{month}.zip"
+        url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
+        dst = f"{out_dir}/{symbol}-1h-{month}.csv"
 
-        logger.info(f"→ DOWNLOAD {zip_name}")
-        res = subprocess.run(["curl","-sSf",url,"-o","tmp.zip"], capture_output=True)
-        if res.returncode == 0:
-            subprocess.run(["unzip","-p","tmp.zip"], stdout=open(dst,"wb"), check=True)
-            os.remove("tmp.zip")
-        else:
-            logger.warning(f"{zip_name} nicht gefunden")
-        curr += 1
+    logger.info(f"→ Prüfe {zip_name}")
+    res = subprocess.run(["curl", "-sI", url], capture_output=True)
+    if b"200 OK" not in res.stdout:
+        logger.info(f"   ❌ {zip_name} nicht gefunden")
+        return False
+    logger.info(f"   ✔️ vorhanden, lade…")
+    res = subprocess.run(["curl", "-sSf", url, "-o", "tmp.zip"], capture_output=True)
+    if res.returncode == 0:
+        subprocess.run(["unzip", "-p", "tmp.zip"], stdout=open(dst, "wb"), check=True)
+        os.remove("tmp.zip")
+        logger.info(f"   ✅ {dst}")
+        return True
+    else:
+        logger.warning(f"   ⚠️ Download von {zip_name} fehlgeschlagen")
+        return False
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
     files = list_monthly_files(symbol, "fundingRate")
@@ -87,7 +85,7 @@ def load_and_concat_funding(symbol: str) -> pd.DataFrame:
         opener = gzip.open if fn.endswith(".gz") else open
         df = pd.read_csv(opener(fn, "rt"))
         df.columns = [c.lower() for c in df.columns]
-        check_columns(df, ["calc_time","funding_interval_hours","last_funding_rate"], fn)
+        check_columns(df, ["calc_time", "funding_interval_hours", "last_funding_rate"], fn)
         df["fundingtime"] = pd.to_datetime(df["calc_time"], unit="ms", utc=True, errors="coerce")
         df["fundingrate"] = df["last_funding_rate"]
         dfs.append(df.set_index("fundingtime")[["fundingrate"]])
@@ -97,16 +95,16 @@ def load_and_concat_funding(symbol: str) -> pd.DataFrame:
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_monthly_files(symbol, "premiumIndexKlines")
-    expected = ["open_time","open","close"]
+    expected = ["open_time", "open", "close"]
     frames = []
     for fn in files:
         logger.info(f"Lade Premium-Index-CSV {fn}")
         df = pd.read_csv(fn)
         cols = [c.lower() for c in df.columns]
-        df.columns = [c.replace("opentime","open_time").replace("closetime","close") for c in cols]
+        df.columns = [c.replace("opentime", "open_time").replace("closetime", "close") for c in cols]
         if not set(expected).issubset(df.columns):
             df = pd.read_csv(fn, header=None, names=expected+df.columns[len(expected):])
-        check_columns(df, ["open_time","close"], fn)
+        check_columns(df, ["open_time", "close"], fn)
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
         frames.append(df.set_index("open_time")["close"])
     if not frames:
@@ -136,36 +134,55 @@ def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
     logger.info(f"=== Verarbeitung {symbol} ===")
     inception = SYMBOL_START[symbol]
 
-    # Zeitraum bestimmen
-    if start_date and end_date:
-        sd = start_date[:7]
-        ed = end_date[:7]
+    # 1. Finde das aktuellste Parquet
+    parquet_dir = OUTPUT_DIR
+    pattern = os.path.join(parquet_dir, f"{symbol}-funding-features-*.parquet")
+    files = sorted(glob.glob(pattern))
+    if files:
+        latest_file = max(files, key=os.path.getmtime)
+        existing = pd.read_parquet(latest_file)
+        # Letztes vorhandenes Datum
+        last_idx = existing.index.max()
+        # Wir gehen davon aus, dass das letzte Datum der letzte Tag des letzten vorhandenen Monats ist
+        last_month = last_idx.to_period("M")
+        next_month = (last_month + 1).strftime("%Y-%m")
     else:
-        sd = inception
-        ed = (datetime.datetime.utcnow().date() - datetime.timedelta(days=1)).strftime("%Y-%m")
+        # Noch kein Parquet vorhanden: Starte ab Inception
+        existing = None
+        next_month = inception
 
-    # Download
-    download_and_unzip(symbol, "fundingRate", sd, ed)
-    download_and_unzip(symbol, "premiumIndexKlines", sd, ed)
+    # 2. Prüfe, ob neue Daten für next_month auf Binance vorhanden sind
+    got_funding = download_and_unzip_month(symbol, "fundingRate", next_month)
+    got_premium = download_and_unzip_month(symbol, "premiumIndexKlines", next_month)
 
-    # Laden & Features
+    if not (got_funding and got_premium):
+        logger.info(f"❌ Für {symbol} keine neuen Daten für {next_month} gefunden – nichts zu tun.")
+        return
+
+    # 3. Features neu berechnen (alle vorhandenen + neuen Monat)
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # Speichern
-    out_path = f"{OUTPUT_DIR}/{symbol}-funding-features-{sd}_to_{ed}.parquet"
-    save_parquet(feats, out_path)
-    logger.info(f"✅ {symbol}: geschrieben {len(feats)} Zeilen nach {out_path}")
+    # 4. Schreibe neues Parquet, lösche altes
+    real_sd = feats.index.min().strftime("%Y-%m-%d")
+    real_ed = feats.index.max().strftime("%Y-%m-%d")
+    out_file = os.path.join(parquet_dir, f"{symbol}-funding-features-{real_sd}_to_{real_ed}.parquet")
+    feats.to_parquet(out_file, engine="pyarrow", compression="snappy")
+    logger.info(f"✅ Neues Parquet gespeichert: {out_file}")
+
+    # Alte Dateien löschen (außer die neue)
+    for old in glob.glob(pattern):
+        if old != out_file:
+            os.remove(old)
+            logger.info(f"🗑️ Altes Parquet entfernt: {old}")
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol",     required=True)
-    p.add_argument("--start-date", default=None)
-    p.add_argument("--end-date",   default=None)
     args = p.parse_args()
-    process_symbol(args.symbol, args.start_date, args.end_date)
+    process_symbol(args.symbol)
 
 if __name__ == "__main__":
     main()
