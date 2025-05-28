@@ -85,81 +85,71 @@ def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
       • Index: UTC-Datetime aus 'timestamp'
       • kind='fundingRate'       → Spalte 'fundingRate'
       • kind='premiumIndexKlines'→ Spalte 'close'
-    Unterstützt:
-      • headerless CSVs
-      • verschiedene Header-Varianten (camelCase, snake_case, alte & neue Namen)
-      • wechselnde Reihenfolge oder zusätzliche Spalten
     """
 
-    # 1) Prüfen, ob headerlos (nur Zahlen in der ersten Zeile)
+    # 1) Prüfen auf headerlos
     sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
     headerless = all(str(x).replace('.', '', 1).lstrip('-').isdigit() for x in sample)
 
-    # 2) Datei einlesen
+    # 2) Einlesen
     df = pd.read_csv(path, header=None if headerless else 0)
 
-    # 3) Normierte Spaltenzuordnung: key = lower ohne Unterstriche, value = orig name/index
+    # ── headerlose Zuordnung vorziehen ──────────────────────────────
+    if kind == "fundingRate" and headerless:
+        df.columns = ["timestamp","funding_interval_hours","last_funding_rate"][:df.shape[1]]
+    if kind == "premiumIndexKlines" and headerless:
+        cols = [
+            "open_time","open","high","low","close","volume",
+            "close_time","quote_volume","count",
+            "taker_buy_volume","taker_buy_quote_volume","ignore"
+        ]
+        df.columns = cols[:df.shape[1]]
+
+    # Jetzt erst die normierte Spalten-Map bauen
     norm_map = {}
     for col in df.columns:
-        name = str(col)
-        key = re.sub(r"[_\s]", "", name.lower())
+        key = re.sub(r"[_\s]", "", str(col).lower())
         norm_map[key] = col
 
+    # ── FundingRate ─────────────────────────────────────────────────
     if kind == "fundingRate":
-        # ── FUNDING RATE ─────────────────────────────────────────────────
-        if headerless:
-            # headerlose Variante: erwarten (timestamp-ms, interval, rate)
-            df.columns = ["timestamp", "funding_interval_hours", "last_funding_rate"][:df.shape[1]]
-
-        # nun suchen wir per norm_map:
-        # mögliche Timestamp-Keys: "calctime", "timestamp", "fundingtime"
-        for k in ("calctime", "timestamp", "fundingtime"):
+        # Timestamp-Feld finden
+        for k in ("calctime","timestamp","fundingtime"):
             if k in norm_map:
-                ts_col = norm_map[k]; break
+                ts = norm_map[k]; break
         else:
-            raise ValueError(f"{path}: Konnte kein Timestamp-Feld finden ({list(norm_map)})")
+            raise ValueError(f"{path}: Kein Timestamp-Feld in {list(norm_map)}")
 
-        # mögliche Rate-Keys: "lastfundingrate", "fundingrate"
-        for k in ("lastfundingrate", "fundingrate"):
+        # Rate-Feld finden
+        for k in ("lastfundingrate","fundingrate"):
             if k in norm_map:
-                fr_col = norm_map[k]; break
+                fr = norm_map[k]; break
         else:
-            raise ValueError(f"{path}: Konnte kein FundingRate-Feld finden ({list(norm_map)})")
+            raise ValueError(f"{path}: Kein FundingRate-Feld in {list(norm_map)}")
 
-        df = df.rename(columns={ts_col: "timestamp", fr_col: "fundingRate"})
-        df = df[["timestamp", "fundingRate"]]
+        df = df.rename(columns={ts:"timestamp", fr:"fundingRate"})
+        df = df[["timestamp","fundingRate"]]
 
+    # ── PremiumIndexKlines ──────────────────────────────────────────
     else:
-        # ── PREMIUM INDEX KLINES ───────────────────────────────────────────
-        if headerless:
-            # headerlose Variante: first cols: open_time,open,high,low,close,...
-            expected = [
-                "open_time","open","high","low","close","volume",
-                "close_time","quote_volume","count",
-                "taker_buy_volume","taker_buy_quote_volume","ignore"
-            ]
-            df.columns = expected[:df.shape[1]]
-
-        # Timestamp candidates: "open_time","opentime"
-        for k in ("opentime", "opentime", "open_time"):
+        # Timestamp-Feld finden
+        for k in ("opentime","open_time"):
             if k in norm_map:
-                ts_col = norm_map[k]; break
+                ts = norm_map[k]; break
         else:
-            raise ValueError(f"{path}: Konnte kein open_time/opentime finden ({list(norm_map)})")
+            raise ValueError(f"{path}: Kein open_time/opentime in {list(norm_map)}")
 
-        # Close-Wert:
+        # Close-Feld finden
         if "close" in norm_map:
-            cl_col = norm_map["close"]
+            cl = norm_map["close"]
         else:
-            raise ValueError(f"{path}: Konnte kein close-Feld finden ({list(norm_map)})")
+            raise ValueError(f"{path}: Kein close-Feld in {list(norm_map)}")
 
-        df = df.rename(columns={ts_col: "timestamp", cl_col: "close"})
-        df = df[["timestamp", "close"]]
+        df = df.rename(columns={ts:"timestamp", cl:"close"})
+        df = df[["timestamp","close"]]
 
-    # 4) Timestamp → datetime UTC
-    df["timestamp"] = pd.to_datetime(
-        df["timestamp"], unit="ms", utc=True, errors="coerce"
-    )
+    # ── Timestamp → datetime UTC
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
     df = df.set_index("timestamp").sort_index()
 
     return df
