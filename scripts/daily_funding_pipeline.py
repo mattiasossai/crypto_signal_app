@@ -5,6 +5,7 @@ import argparse
 import subprocess
 import logging
 import pandas as pd
+import re
 import numpy as np
 from datetime import datetime, timedelta
 
