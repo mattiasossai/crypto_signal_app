@@ -260,6 +260,11 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     df_new = extract_raw_for_days(symbol, rawdir, sd, ed)
     shutil.rmtree(rawdir)
 
+    # ✋ Wenn df_new gar keine echten Tage liefert, brechen wir ab
+    if not df_new['file_exists'].any():
+        print(f"ℹ️ {symbol}: Keine neuen BookDepth-Daten ab {sd.date()}, nichts zu tun.")
+        return
+
     df_all = pd.concat([df_old, df_new]).sort_index()
     df_upd = add_rolling_micro(df_all)
 
@@ -277,10 +282,11 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         f"{symbol}-features-{real_sd}_to_{real_ed}.parquet"
     )
 
-    # Entferne alte Datei mit falschem Datum falls vorhanden
-    if os.path.exists(final_out_file):
-        os.remove(final_out_file)
-
+    # 🗑️ Vor dem Umbenennen alle alten Parquets dieses Symbols entfernen
+    for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
+        if old != final_out_file:
+            os.remove(old)
+    
     # Benenne temporäre Datei um
     os.rename(tmp_out_file, final_out_file)
 
