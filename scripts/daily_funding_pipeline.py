@@ -76,63 +76,93 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
         logger.warning(f"   ⚠️ Download von {zip_name} fehlgeschlagen")
         return False
 
+# ── Flexible CSV-Leser für FundingRate & PremiumIndexKlines ──
 def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
     """
-    Liest eine CSV ein und normalisiert die Header:
-      - kind="fundingRate": liefert DataFrame mit Index timestamp UTC und Spalte fundingRate
-      - kind="premiumIndexKlines": liefert DataFrame mit Index timestamp UTC und Spalte close
-    Wir decken calc_time, last_funding_rate, fundingtime, opentime etc. ab.
+    Liest FundingRate- oder PremiumIndexKlines-CSV ein,
+    erkennt Header-lose Dateien und normalisiert die Spalten.
+    Gibt DataFrame mit UTC-Index "timestamp" zurück und:
+      - kind="fundingRate": Spalte "fundingRate"
+      - kind="premiumIndexKlines": Spalte "close"
     """
-    df = pd.read_csv(path)
+    # 1) Einzige Zeile probeweise ohne Header lesen
+    sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
+    headerless = all(
+        str(x).replace('.', '', 1).lstrip('-').isdigit()
+        for x in sample
+    )
+    # 2) Datei vollständig laden (mit oder ohne Header)
+    if headerless:
+        df = pd.read_csv(path, header=None)
+    else:
+        df = pd.read_csv(path)
+
     cols = [c.lower() for c in df.columns]
 
     if kind == "fundingRate":
-        # neuester Standard
-        if {"calc_time","last_funding_rate"}.issubset(cols):
+        # Header-lose Variante: zwei Spalten timestamp & fundingRate
+        if headerless:
+            df.columns = ["timestamp", "fundingRate"]
+        # neuer Standard: calc_time & last_funding_rate
+        elif {"calc_time", "last_funding_rate"}.issubset(cols):
             df = df.rename(columns={
                 df.columns[cols.index("calc_time")]: "timestamp",
                 df.columns[cols.index("last_funding_rate")]: "fundingRate"
             })
-        # ältere Variante: direkt timestamp + fundingrate
-        elif {"timestamp","fundingrate"}.issubset(cols):
-            df = df.rename(columns={
-                df.columns[cols.index("timestamp")]: "timestamp",
-                df.columns[cols.index("fundingrate")]: "fundingRate"
-            })
-        # fallback: fundingtime + funding_interval_hours + last_funding_rate
-        elif {"fundingtime","last_funding_rate"}.issubset(cols):
-            df = df.rename(columns={
-                df.columns[cols.index("fundingtime")]: "timestamp",
-                df.columns[cols.index("last_funding_rate")]: "fundingRate"
-            })
+        # ältere Varianten: timestamp/fundingtime + funding_rate/fundingRate
         else:
-            raise ValueError(f"{path}: Unbekannter Funding-Header {df.columns.tolist()}")
+            colmap = {c.lower(): c for c in df.columns}
+            # timestamp
+            for alt in ("timestamp", "fundingtime", "funding_time"):
+                if alt in colmap:
+                    df = df.rename(columns={colmap[alt]: "timestamp"})
+                    break
+            # fundingRate
+            for alt in ("funding_rate", "fundingrate", "last_funding_rate"):
+                if alt in colmap:
+                    df = df.rename(columns={colmap[alt]: "fundingRate"})
+                    break
 
-        req = {"timestamp","fundingRate"}
+        required = {"timestamp", "fundingRate"}
 
     else:  # premiumIndexKlines
-        # häufigster Fall
-        if {"open_time","close"}.issubset(cols):
+        # erwartete Spalten, falls headerless
+        expected = [
+            "open_time","open","high","low","close","volume",
+            "close_time","quote_volume","count",
+            "taker_buy_volume","taker_buy_quote_volume","ignore"
+        ]
+        if headerless:
+            df.columns = expected
+        # normaler Header: open_time & close
+        elif {"open_time", "close"}.issubset(cols):
             df = df.rename(columns={
                 df.columns[cols.index("open_time")]: "timestamp",
                 df.columns[cols.index("close")]: "close"
             })
-        # CamelCase-Fallback
-        elif {"opentime","close"}.issubset(cols):
+        # CamelCase-Fallback: opentime & close
+        elif {"opentime", "close"}.issubset(cols):
             df = df.rename(columns={
                 df.columns[cols.index("opentime")]: "timestamp",
                 df.columns[cols.index("close")]: "close"
             })
         else:
-            raise ValueError(f"{path}: Unbekannter Premium-Header {df.columns.tolist()}")
+            raise ValueError(f"{path}: Unbekannter Premium-Header {list(df.columns)}")
 
-        req = {"timestamp","close"}
+        required = {"timestamp", "close"}
 
-    missing = req - set(df.columns)
+    # Validierung
+    missing = required - set(df.columns)
     if missing:
         raise ValueError(f"{path}: Fehlende Spalten {missing}")
-    # Timestamp → datetime
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+
+    # Timestamp → datetime UTC
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        unit="ms",
+        utc=True,
+        errors="coerce"
+    )
     df = df.set_index("timestamp").sort_index()
     return df
 
