@@ -130,28 +130,64 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out["basis"] = np.nan
     return out
 
-def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
+def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     logger.info(f"=== Verarbeitung {symbol} ===")
     inception = SYMBOL_START[symbol]
-
-    # 1. Finde das aktuellste Parquet
     parquet_dir = OUTPUT_DIR
     pattern = os.path.join(parquet_dir, f"{symbol}-funding-features-*.parquet")
     files = sorted(glob.glob(pattern))
+
+    # ---- Full-History-Modus: Alle Monate von-bis ----
+    if start_date and end_date:
+        start_month = pd.Period(start_date, "M")
+        end_month = pd.Period(end_date, "M")
+        months = []
+        curr = start_month
+        while curr <= end_month:
+            months.append(curr.strftime("%Y-%m"))
+            curr += 1
+
+        got_any = False
+        for month in months:
+            got_funding = download_and_unzip_month(symbol, "fundingRate", month)
+            got_premium = download_and_unzip_month(symbol, "premiumIndexKlines", month)
+            if got_funding and got_premium:
+                got_any = True
+        if not got_any:
+            logger.info(f"❌ Für {symbol} keine neuen Daten im Zeitraum {start_date} bis {end_date} – nichts zu tun.")
+            return
+
+        # Features für alle geladenen Monate berechnen
+        df_fund = load_and_concat_funding(symbol)
+        feats   = compute_features(df_fund)
+        prem    = load_and_concat_premium(symbol, feats.index)
+        feats["basis"] = prem
+
+        real_sd = feats.index.min().strftime("%Y-%m-%d")
+        real_ed = feats.index.max().strftime("%Y-%m-%d")
+        out_file = os.path.join(parquet_dir, f"{symbol}-funding-features-{real_sd}_to_{real_ed}.parquet")
+        feats.to_parquet(out_file, engine="pyarrow", compression="snappy")
+        logger.info(f"✅ Neues Parquet (Full-History) gespeichert: {out_file}")
+
+        # Clean-Up: Nur neues Parquet behalten
+        for old in glob.glob(pattern):
+            if old != out_file:
+                os.remove(old)
+                logger.info(f"🗑️ Altes Parquet entfernt: {old}")
+        return
+
+    # ---- Inkrementell: Nur nächsten Monat prüfen ----
     if files:
         latest_file = max(files, key=os.path.getmtime)
         existing = pd.read_parquet(latest_file)
-        # Letztes vorhandenes Datum
         last_idx = existing.index.max()
-        # Wir gehen davon aus, dass das letzte Datum der letzte Tag des letzten vorhandenen Monats ist
         last_month = last_idx.to_period("M")
         next_month = (last_month + 1).strftime("%Y-%m")
     else:
-        # Noch kein Parquet vorhanden: Starte ab Inception
         existing = None
         next_month = inception
 
-    # 2. Prüfe, ob neue Daten für next_month auf Binance vorhanden sind
+    # Prüfe neuen Monat, nur wenn ZIP auf Binance vorhanden!
     got_funding = download_and_unzip_month(symbol, "fundingRate", next_month)
     got_premium = download_and_unzip_month(symbol, "premiumIndexKlines", next_month)
 
@@ -159,20 +195,19 @@ def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
         logger.info(f"❌ Für {symbol} keine neuen Daten für {next_month} gefunden – nichts zu tun.")
         return
 
-    # 3. Features neu berechnen (alle vorhandenen + neuen Monat)
+    # Features aus allen bisherigen + neuem Monat berechnen
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # 4. Schreibe neues Parquet, lösche altes
     real_sd = feats.index.min().strftime("%Y-%m-%d")
     real_ed = feats.index.max().strftime("%Y-%m-%d")
     out_file = os.path.join(parquet_dir, f"{symbol}-funding-features-{real_sd}_to_{real_ed}.parquet")
     feats.to_parquet(out_file, engine="pyarrow", compression="snappy")
     logger.info(f"✅ Neues Parquet gespeichert: {out_file}")
 
-    # Alte Dateien löschen (außer die neue)
+    # Alte Parquets löschen, nur aktuelles behalten
     for old in glob.glob(pattern):
         if old != out_file:
             os.remove(old)
@@ -181,8 +216,10 @@ def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol",     required=True)
+    p.add_argument("--start-date", default=None)
+    p.add_argument("--end-date",   default=None)
     args = p.parse_args()
-    process_symbol(args.symbol)
+    process_symbol(args.symbol, args.start_date, args.end_date)
 
 if __name__ == "__main__":
     main()
