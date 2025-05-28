@@ -9,7 +9,7 @@ import numpy as np
 import datetime
 import logging
 
-# ── Integrierte Logger- und Speicher-Funktionen ──
+# ── Logger & Parquet-Save ──
 def init_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
@@ -40,13 +40,10 @@ ROLL_HOURS = 8
 SMA_DAYS   = 7
 
 def remote_exists(url: str) -> bool:
-    """
-    Prüft per HEAD-Request (curl -I -f), ob die Datei existiert.
-    """
+    """Prüft per HEAD-Request, ob die ZIP auf Binance existiert."""
     res = subprocess.run(
         ["curl", "-s", "-I", "-f", url],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     return res.returncode == 0
 
@@ -54,50 +51,49 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
     path = f"{LOCAL_BASE}/{kind}/{symbol}"
     if kind == "premiumIndexKlines":
         path += "/1h"
-        pattern = f"{symbol}-1h-*.csv"
+        pat = f"{symbol}-1h-*.csv"
     else:
-        pattern = f"{symbol}-fundingRate-*.csv"
-    return sorted(glob.glob(f"{path}/{pattern}"))
+        pat = f"{symbol}-fundingRate-*.csv"
+    return sorted(glob.glob(f"{path}/{pat}"))
 
 def download_and_unzip(symbol: str, kind: str, start: str, end: str):
     """
-    Lädt nur die Monate von start bis end (YYYY-MM) herunter, falls vorhanden.
+    Lädt nur vorhandene ZIPs von YYYY-MM=start bis end herunter
+    und entpackt sie direkt ins CSV-Format.
     """
-    base_url = "https://data.binance.vision/data/futures/um/monthly"
-    out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
-    os.makedirs(out_dir, exist_ok=True)
+    base = "https://data.binance.vision/data/futures/um/monthly"
+    out  = f"{LOCAL_BASE}/{kind}/{symbol}"
+    os.makedirs(out, exist_ok=True)
 
     curr = pd.Period(start, "M")
     last = pd.Period(end,   "M")
     while curr <= last:
-        per = curr.strftime("%Y-%m")
-        if kind == "fundingRate":
-            zip_name = f"{symbol}-fundingRate-{per}.zip"
-            url      = f"{base_url}/fundingRate/{symbol}/{zip_name}"
-            dst      = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
+        per     = curr.strftime("%Y-%m")
+        if kind=="fundingRate":
+            zipn = f"{symbol}-fundingRate-{per}.zip"
+            url  = f"{base}/fundingRate/{symbol}/{zipn}"
+            dst  = f"{out}/{symbol}-fundingRate-{per}.csv"
         else:
-            zip_name = f"{symbol}-1h-{per}.zip"
-            url      = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
-            dst      = f"{out_dir}/{symbol}-1h-{per}.csv"
+            zipn = f"{symbol}-1h-{per}.zip"
+            url  = f"{base}/premiumIndexKlines/{symbol}/1h/{zipn}"
+            dst  = f"{out}/{symbol}-1h-{per}.csv"
 
-        logger.info(f"→ Prüfe {zip_name}")
+        logger.info(f"→ Prüfe {zipn}")
         if remote_exists(url):
-            logger.info(f"  ✔️ vorhanden, lade herunter…")
-            # über "-p" direkt auspacken
+            logger.info("  ✔️ vorhanden, lade…")
             subprocess.run(["curl","-sSf",url,"-o","tmp.zip"], check=True)
             subprocess.run(
                 ["unzip","-p","tmp.zip"],
-                stdout=open(dst, "wb"),
-                check=True
+                stdout=open(dst,"wb"), check=True
             )
             os.remove("tmp.zip")
-            logger.info(f"  ✅ gespeichert nach {dst}")
+            logger.info(f"  ✅ {dst}")
         else:
-            logger.info(f"  ℹ️ nicht gefunden, überspringe.")
+            logger.info("  ℹ️ nicht gefunden, überspringe.")
         curr += 1
 
-def check_columns(df: pd.DataFrame, required: list[str], fn: str):
-    miss = [c for c in required if c not in df.columns]
+def check_columns(df: pd.DataFrame, req: list[str], fn: str):
+    miss = [c for c in req if c not in df.columns]
     if miss:
         raise ValueError(f"{fn}: Fehlende Spalten {miss}")
 
@@ -105,12 +101,12 @@ def load_and_concat_funding(symbol: str) -> pd.DataFrame:
     files = list_monthly_files(symbol, "fundingRate")
     dfs = []
     for fn in files:
-        logger.info(f"Lade Funding-CSV {fn}")
+        logger.info(f"Lade Funding {fn}")
         opener = gzip.open if fn.endswith(".gz") else open
-        df = pd.read_csv(opener(fn, "rt"))
+        df = pd.read_csv(opener(fn,"rt"))
         df.columns = [c.lower() for c in df.columns]
         check_columns(df, ["calc_time","funding_interval_hours","last_funding_rate"], fn)
-        df["fundingtime"] = pd.to_datetime(df["calc_time"], unit="ms", utc=True, errors="coerce")
+        df["fundingtime"] = pd.to_datetime(df["calc_time"], unit="ms", utc=True)
         df["fundingrate"] = df["last_funding_rate"]
         dfs.append(df.set_index("fundingtime")[["fundingrate"]])
     if not dfs:
@@ -122,28 +118,28 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     expected = ["open_time","open","close"]
     frames = []
     for fn in files:
-        logger.info(f"Lade Premium-Index-CSV {fn}")
+        logger.info(f"Lade Premium {fn}")
         df = pd.read_csv(fn)
         cols = [c.lower() for c in df.columns]
         df.columns = [c.replace("opentime","open_time").replace("closetime","close") for c in cols]
         if not set(expected).issubset(df.columns):
             df = pd.read_csv(fn, header=None, names=expected+df.columns[len(expected):])
         check_columns(df, ["open_time","close"], fn)
-        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
         frames.append(df.set_index("open_time")["close"])
     if not frames:
         raise ValueError("Keine Premium-Index-Dateien gefunden.")
-    all_prem = pd.concat(frames).sort_index().drop_duplicates()
-    return all_prem.reindex(idx, method="ffill")
+    prem = pd.concat(frames).sort_index().drop_duplicates()
+    return prem.reindex(idx, method="ffill")
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     hourly = fund_df["fundingrate"].resample("1h").mean().ffill()
     out = pd.DataFrame({"fundingRate": hourly})
     out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
-    window = SMA_DAYS * 24
-    out["sma7d"]   = out["fundingRate_8h"].rolling(window).mean()
-    out["zscore"]  = (out["fundingRate_8h"] - out["sma7d"]) / out["fundingRate_8h"].rolling(window).std()
-    out["flip"]    = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
+    w = SMA_DAYS*24
+    out["sma7d"]  = out["fundingRate_8h"].rolling(w).mean()
+    out["zscore"] = (out["fundingRate_8h"]-out["sma7d"])/out["fundingRate_8h"].rolling(w).std()
+    out["flip"]   = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
     out["has_sma"]    = out["sma7d"].notna().astype(int)
     out["has_zscore"] = out["zscore"].notna().astype(int)
     out["sma7d"]  = out["sma7d"].fillna(0)
@@ -154,62 +150,61 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out["basis"] = np.nan
     return out
 
-def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
+def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
     logger.info(f"=== Verarbeitung {symbol} ===")
-    inception = SYMBOL_START.get(symbol)
-    if not inception:
-        raise ValueError(f"Inception für {symbol} fehlt.")
+    inception = SYMBOL_START[symbol]
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
 
-    # Download-Zeitraum ermitteln
+    # 1) Historisch nur wenn explizit über CLI:
     if start_date and end_date:
         download_start = start_date[:7]
         download_end   = end_date[:7]
     else:
+        # 2) Inkrementell: nur letzten abgeschlossenen Monat
+        last_month = (pd.Timestamp.utcnow().to_period("M") - 1).strftime("%Y-%m")
         if os.path.exists(out_path):
-            existing = pd.read_parquet(out_path)
-            last_ts  = existing.index.max()
-            download_start = (last_ts.to_period("M") + 1).strftime("%Y-%m")
+            existing      = pd.read_parquet(out_path)
+            last_ts       = existing.index.max()
+            next_month    = (last_ts.to_period("M")+1).strftime("%Y-%m")
+            download_start = next_month
         else:
-            download_start = inception
-        download_end = (pd.Timestamp.utcnow().to_period("M") - 1).strftime("%Y-%m")
+            # hier nur letzten Monat, nicht vom Inception
+            download_start = last_month
+        download_end = last_month
 
-    # Herunterladen, falls Monate neu sind
-    if pd.Period(download_start, "M") <= pd.Period(download_end, "M"):
+    # 3) Download falls neuer Monat
+    if pd.Period(download_start,"M") <= pd.Period(download_end,"M"):
         download_and_unzip(symbol, "fundingRate", download_start, download_end)
-        download_and_unzip(symbol, "premiumIndexKlines", download_start, download_end)
+        download_and_unzip(symbol, "premiumIndexKlines", symbol, download_start, download_end)
     else:
-        logger.info(f"ℹ️ {symbol}: Kein neuer Monat zum Download ({download_start} > {download_end}).")
+        logger.info(f"ℹ️ {symbol}: kein neuer Monat ({download_start}>{download_end})")
 
-    # Daten zusammenführen und Features berechnen
+    # 4) Daten laden & Feature-Berechnung
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # Parquet schreiben oder anhängen
+    # 5) Parquet schreiben / anhängen
     if os.path.exists(out_path):
         existing = pd.read_parquet(out_path)
         merged   = pd.concat([existing, feats]).sort_index()
         merged   = merged[~merged.index.duplicated(keep="first")]
-        if len(merged) == len(existing):
-            logger.info(f"ℹ️ {symbol}: Keine neuen Zeilen – nothing to do.")
+        if len(merged)==len(existing):
+            logger.info("ℹ️ keine neuen Zeilen – done")
             return
         save_parquet(merged, out_path)
-        logger.info(f"♻️ {symbol}: +{len(merged)-len(existing)} Zeilen angehängt")
+        logger.info(f"♻️ angehängt +{len(merged)-len(existing)} Zeilen")
     else:
         save_parquet(feats, out_path)
-        logger.info(f"✅ {symbol}: Initial erstellt, {len(feats)} Zeilen")
+        logger.info(f"✅ initial erstellt, {len(feats)} Zeilen")
 
-def main():
+if __name__=="__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--symbol",     required=True)
     p.add_argument("--start-date", default=None)
     p.add_argument("--end-date",   default=None)
     args = p.parse_args()
     process_symbol(args.symbol, args.start_date, args.end_date)
-
-if __name__ == "__main__":
-    main()
