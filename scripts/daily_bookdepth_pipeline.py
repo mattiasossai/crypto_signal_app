@@ -282,11 +282,10 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         f"{symbol}-features-{real_sd}_to_{real_ed}.parquet"
     )
 
-    # 🗑️ Vor dem Umbenennen alle alten Parquets dieses Symbols entfernen
+    # 🗑️ Jetzt ALLE alten Parquets entfernen (inkl. alter finaler Files)
     for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
-        if old != final_out_file:
-            os.remove(old)
-    
+        os.remove(old)
+
     # Benenne temporäre Datei um
     os.rename(tmp_out_file, final_out_file)
 
