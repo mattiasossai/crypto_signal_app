@@ -84,7 +84,7 @@ def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
       - kind='fundingRate'       → Spalte 'fundingRate' (float)
       - kind='premiumIndexKlines'→ Spalte 'close' (float)
     Unterstützt:
-      • headerless CSVs (nur numerische Werte in der ersten Zeile)
+      • headerless CSVs
       • verschiedene Header-Varianten (camelCase, snake_case, alte & neue Namen)
     """
 
@@ -92,48 +92,50 @@ def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
     sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
     headerless = all(str(x).replace('.', '', 1).lstrip('-').isdigit() for x in sample)
 
-    # 2) Datei einlesen – immer header=None, um integer‐Spaltennamen zu vermeiden
-    df = pd.read_csv(path, header=None)
+    # 2) Datei vollständig laden (mit oder ohne Header)
+    if headerless:
+        df = pd.read_csv(path, header=None)
+    else:
+        df = pd.read_csv(path)
+    # → df steht jetzt, Spalten aber noch nicht korrekt benannt
 
-    # 3) Spaltennamen als Strings
-    df.columns = [str(i) for i in range(df.shape[1])]
+    cols = [str(c).lower() for c in df.columns]
 
     if kind == "fundingRate":
         # ── FUNDING RATE ─────────────────────────────────────────────
+        expected = ["calc_time", "funding_interval_hours", "last_funding_rate"]
         if headerless:
-            # nur Timestamp + Rate
-            if df.shape[1] < 2:
-                raise ValueError(f"{path}: zu wenige Spalten für fundingRate")
-            df = df.iloc[:, :2]
-            df.columns = ["timestamp", "fundingRate"]
+            # assign expected names, truncate falls weniger Spalten
+            names = expected[:df.shape[1]]
+            df.columns = names
+            # Umbenennen: calc_time→timestamp, last_funding_rate→fundingRate
+            df = df.rename(columns={
+                "calc_time": "timestamp",
+                "last_funding_rate": "fundingRate"
+            })
         else:
-            # versuche Headerful-Variante: lade mit header=0, dann mappen
-            df = pd.read_csv(path)
-            cols = [c.lower() for c in df.columns]
-            # neuer Standard
-            if "calc_time" in cols and "last_funding_rate" in cols:
+            # Headerful-Varianten
+            if {"calc_time", "last_funding_rate"}.issubset(cols):
                 df = df.rename(columns={
                     df.columns[cols.index("calc_time")]: "timestamp",
                     df.columns[cols.index("last_funding_rate")]: "fundingRate"
                 })
             else:
-                # suche Timestamp-Spalte
-                for alt in ("calc_time","timestamp","fundingtime","funding_time"):
-                    if alt in cols:
-                        df = df.rename(columns={df.columns[cols.index(alt)]: "timestamp"})
+                # Fallback auf ältere Feldnamen
+                colmap = {c.lower(): c for c in df.columns}
+                for alt in ("timestamp", "fundingtime", "funding_time"):
+                    if alt in colmap:
+                        df = df.rename(columns={colmap[alt]: "timestamp"})
                         break
-                # suche Rate-Spalte
-                cols = [c.lower() for c in df.columns]
-                for alt in ("last_funding_rate","funding_rate","fundingrate"):
-                    if alt in cols:
-                        df = df.rename(columns={df.columns[cols.index(alt)]: "fundingRate"})
+                for alt in ("funding_rate", "fundingrate", "last_funding_rate"):
+                    if alt in colmap:
+                        df = df.rename(columns={colmap[alt]: "fundingRate"})
                         break
-            if {"timestamp","fundingRate"} - set(df.columns):
-                missing = {"timestamp","fundingRate"} - set(df.columns)
-                raise ValueError(f"{path}: fehlende Spalten {missing}")
-            df = df[["timestamp","fundingRate"]]
+        # wir brauchen nur diese beiden Spalten
+        df = df[["timestamp", "fundingRate"]]
+        required = {"timestamp", "fundingRate"}
 
-    else:  # premiumIndexKlines
+    else:
         # ── PREMIUM INDEX KLINES ────────────────────────────────────
         expected = [
             "open_time","open","high","low","close","volume",
@@ -146,17 +148,16 @@ def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
             if df.shape[1] < 2:
                 raise ValueError(f"{path}: zu wenige Spalten für premiumIndexKlines")
             df.columns = names
-            df = df.rename(columns={"open_time": "timestamp", "close": "close"})
+            # open_time→timestamp, close bleibt close
+            df = df.rename(columns={"open_time": "timestamp"})
         else:
-            # headerful: lese nochmal mit header=0
-            df = pd.read_csv(path)
-            cols = [c.lower() for c in df.columns]
-            if "open_time" in cols and "close" in cols:
+            # headerful: benenne open_time/opentime → timestamp, close → close
+            if {"open_time","close"}.issubset(cols):
                 df = df.rename(columns={
                     df.columns[cols.index("open_time")]: "timestamp",
                     df.columns[cols.index("close")]: "close"
                 })
-            elif "opentime" in cols and "close" in cols:
+            elif {"opentime","close"}.issubset(cols):
                 df = df.rename(columns={
                     df.columns[cols.index("opentime")]: "timestamp",
                     df.columns[cols.index("close")]: "close"
@@ -164,10 +165,18 @@ def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
             else:
                 raise ValueError(f"{path}: Unbekannter Premium-Header {df.columns.tolist()}")
             df = df[["timestamp","close"]]
+        required = {"timestamp", "close"}
 
-    # 4) Konvertiere Timestamp → UTC
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+    # 4) Timestamp → datetime UTC
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"], unit="ms", utc=True, errors="coerce"
+    )
     df = df.set_index("timestamp").sort_index()
+
+    # 5) Validierung
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"{path}: Fehlende Spalten {missing}")
 
     return df
 
