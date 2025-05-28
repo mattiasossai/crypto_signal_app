@@ -55,6 +55,9 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
     return sorted(glob.glob(f"{path}/{pattern}"))
 
 def download_and_unzip(symbol: str, kind: str, start: str, end: str):
+    """
+    Lädt nur die Monate von start bis end (YYYY-MM) herunter.
+    """
     base_url = "https://data.binance.vision/data/futures/um/monthly"
     out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
     os.makedirs(out_dir, exist_ok=True)
@@ -139,20 +142,34 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     if not inception:
         raise ValueError(f"Inception für {symbol} fehlt.")
 
-    # Zeitrange
-    if start_date and end_date:
-        sd = pd.to_datetime(start_date).tz_localize("UTC")
-        ed = pd.to_datetime(end_date).tz_localize("UTC")
-    else:
-        sd = None
-        ed = pd.Timestamp(datetime.datetime.utcnow().date()).tz_localize("UTC")
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Determine resume vs full historical
     out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Download
-    download_and_unzip(symbol, "fundingRate", inception, ed.strftime("%Y-%m"))
-    download_and_unzip(symbol, "premiumIndexKlines", inception, ed.strftime("%Y-%m"))
+    if start_date and end_date:
+        # full historical run
+        download_start = start_date[:7]
+        download_end   = end_date[:7]
+    else:
+        # daily incremental
+        if os.path.exists(out_path):
+            existing = pd.read_parquet(out_path)
+            last_ts = existing.index.max()
+            # next month after the last timestamp
+            download_start = (last_ts.to_period("M") + 1).strftime("%Y-%m")
+        else:
+            download_start = inception
+        # up to last completed month
+        download_end = (pd.Timestamp.utcnow().to_period("M") - 1).strftime("%Y-%m")
+
+    # if nothing new to fetch
+    if pd.Period(download_start, "M") > pd.Period(download_end, "M"):
+        logger.info(f"ℹ️ {symbol}: Kein neuer Monat zum Download ({download_start} > {download_end}).")
+    else:
+        # Download only needed months
+        download_and_unzip(symbol, "fundingRate", download_start, download_end)
+        download_and_unzip(symbol, "premiumIndexKlines", download_start, download_end)
 
     # Load & Compute
     df_fund = load_and_concat_funding(symbol)
@@ -160,16 +177,14 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # Write oder Early-Exit
+    # Write or append
     if os.path.exists(out_path):
         existing = pd.read_parquet(out_path)
         merged   = pd.concat([existing, feats]).sort_index()
         merged   = merged[~merged.index.duplicated(keep="first")]
-
         if len(merged) == len(existing):
-            logger.info(f"ℹ️ {symbol}: Keine neuen Funding-Daten – nichts zu tun.")
+            logger.info(f"ℹ️ {symbol}: Keine neuen Zeilen – nothing to do.")
             return
-
         save_parquet(merged, out_path)
         logger.info(f"♻️ {symbol}: +{len(merged)-len(existing)} Zeilen angehängt")
     else:
