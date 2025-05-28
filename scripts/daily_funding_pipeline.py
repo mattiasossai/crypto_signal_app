@@ -78,59 +78,70 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
 
 # ── Flexible CSV-Leser für FundingRate & PremiumIndexKlines ──
 def read_csv_robust(path: str, kind: str) -> pd.DataFrame:
-    # 1) Probezeile: headerless?
+    """
+    Ein CSV-Loader für FundingRate und PremiumIndexKlines, der
+    • headerless files
+    • verschiedene Header-Varianten (snake_case, camelCase, alte & neue Namen)
+    robust behandelt.
+    Liefert einen DataFrame mit UTC-Index 'timestamp' und:
+      - kind='fundingRate'        → Spalte 'fundingRate'
+      - kind='premiumIndexKlines' → Spalte 'close'
+    """
+    import pandas as pd
+
+    # 1) Probezeile lesen, um headerless zu erkennen
     sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
-    headerless = all(str(x).replace('.','',1).lstrip('-').isdigit() for x in sample)
-    
-    # 2) Lade einmal – header=0 oder None
+    headerless = all(str(x).replace('.', '', 1).lstrip('-').isdigit() for x in sample)
+
+    # 2) Einmal laden
     df = pd.read_csv(path, header=None if headerless else 0)
-    
-    # 3) Uni­verselles Mapping-Dict für beide kinds
+
+    # 3) Schema-Definitionen
     SCHEMA = {
-      "fundingRate": {
-        "positions": {"timestamp": 0, "fundingRate": 2},
-        "names": ["calc_time","funding_interval_hours","last_funding_rate"],
-        "aliases": {
-          "timestamp": ["calc_time","timestamp","fundingtime","funding_time"],
-          "fundingRate": ["last_funding_rate","funding_rate","fundingrate"]
+        "fundingRate": {
+            "positions": {"timestamp": 0, "fundingRate": 2},
+            "aliases": {
+                "timestamp": ["calc_time", "timestamp", "fundingtime", "funding_time"],
+                "fundingRate": ["last_funding_rate", "funding_rate", "fundingrate"]
+            }
+        },
+        "premiumIndexKlines": {
+            "positions": {"timestamp": 0, "close": 4},
+            "aliases": {
+                "timestamp": ["open_time", "opentime"],
+                "close": ["close"]
+            }
         }
-      },
-      "premiumIndexKlines": {
-        "positions": {"timestamp": 0, "close": 4},
-        "names": ["open_time","open","high","low","close","volume","close_time",…],
-        "aliases": {
-          "timestamp": ["open_time","opentime"],
-          "close": ["close"]
-        }
-      }
     }
     meta = SCHEMA[kind]
-    
+
     if headerless:
-        # benutze positions
-        use = {col: idx for col, idx in meta["positions"].items()}
-        df = df.rename(columns=lambda i: i)  # integer columns
-        df = df.iloc[:, list(use.values())]
-        df.columns = list(use.keys())
+        # Spalten per Position herausziehen
+        cols = []
+        for name, idx in meta["positions"].items():
+            if idx >= df.shape[1]:
+                raise ValueError(f"{path}: erwartete Spalte {idx} fehlt in headerless CSV")
+            cols.append(df.columns[idx])
+        df = df.iloc[:, list(meta["positions"].values())]
+        df.columns = list(meta["positions"].keys())
     else:
-        cols = [c.lower() for c in df.columns]
-        # such erst nach Standard-names
-        mapped = {}
+        # Headerful: per Alias suchen
+        cols_lower = [str(c).lower() for c in df.columns]
+        mapping = {}
         for target, alts in meta["aliases"].items():
             for alt in alts:
-                if alt in cols:
-                    mapped[target] = df.columns[cols.index(alt)]
+                if alt in cols_lower:
+                    mapping[target] = df.columns[cols_lower.index(alt)]
                     break
-        # wenn was fehlt, Fehler
-        missing = set(meta["positions"].keys()) - set(mapped)
+        missing = set(meta["positions"].keys()) - set(mapping.keys())
         if missing:
-            raise ValueError(f"{path}: Missing cols {missing}")
-        df = df.rename(columns=mapped)[list(mapped)]
-    
-    # 4) Timestamp → dt, Index setzen
+            raise ValueError(f"{path}: konnte Spalten {missing} nicht finden (Header: {df.columns.tolist()})")
+        df = df.rename(columns=mapping)[list(mapping.keys())]
+
+    # 4) Timestamp → datetime UTC
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
-    df = df.dropna(subset=["timestamp"]).set_index("timestamp").sort_index()
-    
+    df = df.set_index("timestamp").sort_index()
+
     return df
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
