@@ -39,29 +39,36 @@ def check_columns(df: pd.DataFrame, required: list[str], fn: str):
         raise ValueError(f"{fn}: Fehlende Spalten {miss}")
 
 def list_monthly_files(symbol: str, kind: str) -> list[str]:
-    path = f"{LOCAL_BASE}/{kind}/{symbol}"
     if kind == "premiumIndexKlines":
-        path += "/1h"
+        path = f"{LOCAL_BASE}/premiumIndexKlines/{symbol}/1h"
         pattern = f"{symbol}-1h-*.csv"
-    else:
+    elif kind == "fundingRate":
+        path = f"{LOCAL_BASE}/fundingRate/{symbol}"
         pattern = f"{symbol}-fundingRate-*.csv"
+    else:
+        raise ValueError("kind muss 'fundingRate' oder 'premiumIndexKlines' sein.")
     return sorted(glob.glob(f"{path}/{pattern}"))
 
 def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
     """Lädt **eine** Monatsdatei (zip) herunter und entpackt sie, falls vorhanden."""
     base_url = "https://data.binance.vision/data/futures/um/monthly"
-    out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
-    os.makedirs(out_dir, exist_ok=True)
     if kind == "fundingRate":
+        out_dir = f"{LOCAL_BASE}/fundingRate/{symbol}"
         zip_name = f"{symbol}-fundingRate-{month}.zip"
         url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
         dst = f"{out_dir}/{symbol}-fundingRate-{month}.csv"
-    else:
+    elif kind == "premiumIndexKlines":
+        out_dir = f"{LOCAL_BASE}/premiumIndexKlines/{symbol}/1h"
         zip_name = f"{symbol}-1h-{month}.zip"
         url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
         dst = f"{out_dir}/{symbol}-1h-{month}.csv"
+    else:
+        raise ValueError("kind muss 'fundingRate' oder 'premiumIndexKlines' sein.")
 
+    os.makedirs(out_dir, exist_ok=True)
     logger.info(f"→ Prüfe {zip_name}")
+
+    # HEAD request, prüft ob Datei existiert
     res = subprocess.run(["curl", "-sI", url], capture_output=True)
     if b"200 OK" not in res.stdout:
         logger.info(f"   ❌ {zip_name} nicht gefunden")
