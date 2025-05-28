@@ -80,77 +80,96 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
 # ── Flexible CSV-Leser für FundingRate & PremiumIndexKlines ──
 def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
     """
-    Liest FundingRate- oder PremiumIndexKlines-CSV ein,
-    erkennt headerlose Dateien und normalisiert:
-      • Index: UTC-Datetime aus 'timestamp'
-      • kind='fundingRate'       → Spalte 'fundingRate'
-      • kind='premiumIndexKlines'→ Spalte 'close'
+    Liest eine FundingRate- oder PremiumIndexKlines-CSV vollautomatisch ein,
+    erkennt headerless-Dateien und alle gängigen Header-Varianten
+    und liefert einen DataFrame mit:
+      - Index: UTC-Datetime aus 'timestamp'
+      - für kind='fundingRate': Spalte 'fundingRate'
+      - für kind='premiumIndexKlines': Spalte 'close'
     """
 
-    # 1) Prüfen auf headerlos
+    # 1) Probezeile einlesen (immer ohne Header), um headerless zu detektieren
     sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
     headerless = all(str(x).replace('.', '', 1).lstrip('-').isdigit() for x in sample)
 
-    # 2) Einlesen
+    # 2) ganze Datei einlesen: ohne Header, wenn headerless, sonst mit Header=0
     df = pd.read_csv(path, header=None if headerless else 0)
 
-    # ── headerlose Zuordnung vorziehen ──────────────────────────────
-    if kind == "fundingRate" and headerless:
-        df.columns = ["timestamp","funding_interval_hours","last_funding_rate"][:df.shape[1]]
-    if kind == "premiumIndexKlines" and headerless:
-        cols = [
-            "open_time","open","high","low","close","volume",
-            "close_time","quote_volume","count",
-            "taker_buy_volume","taker_buy_quote_volume","ignore"
-        ]
-        df.columns = cols[:df.shape[1]]
+    # 3) Roh‐Spalten bei headerless sofort benennen
+    if headerless:
+        if kind == "fundingRate":
+            # fundingRate-Dateien haben (meist) 3 Spalten
+            names = ["calc_time", "funding_interval_hours", "last_funding_rate"]
+        else:
+            # premiumIndexKlines hat 12 Spalten
+            names = [
+                "open_time","open","high","low","close","volume",
+                "close_time","quote_volume","count",
+                "taker_buy_volume","taker_buy_quote_volume","ignore"
+            ]
+        # falls Binance mal Spalten weglässt oder anfügt, kürzen wir oder übernehmen alle
+        df.columns = names[:df.shape[1]]
 
-    # Jetzt erst die normierte Spalten-Map bauen
+    # 4) Jetzt eine Norm‐Map aufbauen (bereinigt um Unterstriche, Groß-/Kleinschrift, Spaces)
     norm_map = {}
     for col in df.columns:
-        key = re.sub(r"[_\s]", "", str(col).lower())
+        key = re.sub(r"[\s_]", "", str(col).lower())
         norm_map[key] = col
 
-    # ── FundingRate ─────────────────────────────────────────────────
+    # 5) Spalten-Umbenennung für FundingRate
     if kind == "fundingRate":
-        # Timestamp-Feld finden
-        for k in ("calctime","timestamp","fundingtime"):
-            if k in norm_map:
-                ts = norm_map[k]; break
+        # Timestamp‐Spalte finden
+        for cand in ("calctime","timestamp","fundingtime","funding_time"):
+            if cand in norm_map:
+                ts = norm_map[cand]
+                break
         else:
-            raise ValueError(f"{path}: Kein Timestamp-Feld in {list(norm_map)}")
+            raise ValueError(f"{path}: Kein Timestamp-Feld gefunden (habe: {list(norm_map)})")
 
-        # Rate-Feld finden
-        for k in ("lastfundingrate","fundingrate"):
-            if k in norm_map:
-                fr = norm_map[k]; break
+        # FundingRate‐Spalte finden
+        for cand in ("lastfundingrate","fundingrate","funding_rate"):
+            if cand in norm_map:
+                fr = norm_map[cand]
+                break
         else:
-            raise ValueError(f"{path}: Kein FundingRate-Feld in {list(norm_map)}")
+            raise ValueError(f"{path}: Kein FundingRate-Feld gefunden (habe: {list(norm_map)})")
 
-        df = df.rename(columns={ts:"timestamp", fr:"fundingRate"})
-        df = df[["timestamp","fundingRate"]]
+        df = df.rename(columns={ts: "timestamp", fr: "fundingRate"})
+        df = df[["timestamp", "fundingRate"]]
 
-    # ── PremiumIndexKlines ──────────────────────────────────────────
+    # 6) Spalten-Umbenennung für PremiumIndexKlines
     else:
-        # Timestamp-Feld finden
-        for k in ("opentime","open_time"):
-            if k in norm_map:
-                ts = norm_map[k]; break
+        # Timestamp‐Spalte finden
+        for cand in ("opentime","open_time"):
+            if cand in norm_map:
+                ts = norm_map[cand]
+                break
         else:
-            raise ValueError(f"{path}: Kein open_time/opentime in {list(norm_map)}")
+            raise ValueError(f"{path}: Kein open_time/opentime gefunden (habe: {list(norm_map)})")
 
-        # Close-Feld finden
+        # Close‐Spalte finden
         if "close" in norm_map:
             cl = norm_map["close"]
         else:
-            raise ValueError(f"{path}: Kein close-Feld in {list(norm_map)}")
+            raise ValueError(f"{path}: Kein close-Feld gefunden (habe: {list(norm_map)})")
 
-        df = df.rename(columns={ts:"timestamp", cl:"close"})
-        df = df[["timestamp","close"]]
+        df = df.rename(columns={ts: "timestamp", cl: "close"})
+        df = df[["timestamp", "close"]]
 
-    # ── Timestamp → datetime UTC
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+    # 7) Timestamp → datetime UTC, als Index setzen
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        unit="ms",
+        utc=True,
+        errors="coerce"
+    )
     df = df.set_index("timestamp").sort_index()
+
+    # 8) Final-Check
+    required = {"timestamp", "fundingRate"} if kind=="fundingRate" else {"timestamp","close"}
+    missing = required - set(df.reset_index().columns)
+    if missing:
+        raise ValueError(f"{path}: Fehlende Spalten nach Umbenennung: {missing}")
 
     return df
 
