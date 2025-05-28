@@ -191,21 +191,27 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     feats["basis"] = prem
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    pattern = f"{OUTPUT_DIR}/{symbol}-funding-features-*.parquet"
-    files   = glob.glob(pattern)
-    if files:
-        latest = max(files, key=lambda f: pd.read_parquet(f).index.max())
-        old    = pd.read_parquet(latest)
-        merged = pd.concat([old, feats]).sort_index().drop_duplicates(keep="first")
-    else:
-        merged = feats
-
-    real_sd = merged.index.min().date()
-    real_ed = merged.index.max().date()
-    out_fp  = f"{OUTPUT_DIR}/{symbol}-funding-features-{real_sd}_to_{real_ed}.parquet"
-    save_parquet(merged, out_fp)
-    logger.info(f"Gespeichert {len(merged)} Zeilen in {out_fp}")
-
+    out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
+ 
+     # 1) Wenn schon ein Parquet existiert: alte & neue Zeilen mergen
+     if os.path.exists(out_path):
+         existing = pd.read_parquet(out_path)
+         merged   = pd.concat([existing, feats]).sort_index()
+         # doppelte Zeitpunkte rauswerfen
+         merged   = merged[~merged.index.duplicated(keep="first")]
+ 
+         # ✋ wenn nach dem Merge keine neue Zeile dazugekommen ist → abbrechen
+         if len(merged) == len(existing):
+             logger.info(f"ℹ️ {symbol}: Keine neuen Funding-Daten – nichts zu tun.")
+             return
+ 
+         # ansonsten: überschreiben
+         save_parquet(merged, out_path)
+         logger.info(f"♻️ {symbol}: Funding-Parquet aktualisiert, +{len(merged)-len(existing)} neue Zeilen")
+     else:
+         # noch kein File vorhanden → initialer Write
+         save_parquet(feats, out_path)
+         logger.info(f"✅ {symbol}: Initiales Funding-Parquet erstellt, {len(feats)} Zeilen")
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol",     required=True, help="z.B. BTCUSDT")
