@@ -8,10 +8,10 @@ import subprocess
 import pandas as pd
 import numpy as np
 import datetime
-from dateutil.relativedelta import relativedelta
 import logging
+from dateutil.relativedelta import relativedelta
 
-# ── Logger & Parquet-Save (ehemals utils.py) ──
+# ── Integrierte Logger- und Speicher-Funktionen (war vorher in utils.py) ──
 def init_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
@@ -55,25 +55,25 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
         pattern = f"{symbol}-fundingRate-*.csv"
     return sorted(glob.glob(f"{path}/{pattern}"))
 
-def download_and_unzip(symbol: str, kind: str, start: str, end: str):
+def download_and_unzip(symbol: str, kind: str, start_ym: str, end_ym: str):
     """
-    Lädt nur die Monatspakete von start bis end (YYYY-MM).
+    Lädt nur die Monate von start_ym bis end_ym (Format 'YYYY-MM') herunter.
     """
     base_url = "https://data.binance.vision/data/futures/um/monthly"
     out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
     os.makedirs(out_dir, exist_ok=True)
-    curr = pd.Period(start, "M")
-    last = pd.Period(end,   "M")
+    curr = pd.Period(start_ym, "M")
+    last = pd.Period(end_ym,   "M")
     while curr <= last:
         per = curr.strftime("%Y-%m")
         if kind == "fundingRate":
             zip_name = f"{symbol}-fundingRate-{per}.zip"
-            url      = f"{base_url}/fundingRate/{symbol}/{zip_name}"
-            dst      = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
+            url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
+            dst = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
         else:
             zip_name = f"{symbol}-1h-{per}.zip"
-            url      = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
-            dst      = f"{out_dir}/{symbol}-1h-{per}.csv"
+            url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
+            dst = f"{out_dir}/{symbol}-1h-{per}.csv"
 
         logger.info(f"→ DOWNLOAD {zip_name}")
         res = subprocess.run(["curl","-sSf",url,"-o","tmp.zip"], capture_output=True)
@@ -83,6 +83,20 @@ def download_and_unzip(symbol: str, kind: str, start: str, end: str):
         else:
             logger.warning(f"{zip_name} nicht gefunden")
         curr += 1
+
+def get_last_file_date(symbol: str) -> datetime.date | None:
+    """
+    Liest aus dem Parquet-Filename das letzte Datum im Format YYYY-MM-DD aus.
+    """
+    pattern = f"{OUTPUT_DIR}/{symbol}-funding-features-*_to_*.parquet"
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    latest = max(files, key=os.path.getmtime)
+    m = re.search(r"_to_(\d{4}-\d{2}-\d{2})\.parquet$", latest)
+    if not m:
+        return None
+    return datetime.datetime.strptime(m.group(1), "%Y-%m-%d").date()
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
     files = list_monthly_files(symbol, "fundingRate")
@@ -124,9 +138,8 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({"fundingRate": hourly})
     out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
     window = SMA_DAYS * 24
-    out["sma7d"]  = out["fundingRate_8h"].rolling(window).mean()
-    out["zscore"] = (out["fundingRate_8h"] - out["sma7d"]) \
-                    / out["fundingRate_8h"].rolling(window).std()
+    out["sma7d"]   = out["fundingRate_8h"].rolling(window).mean()
+    out["zscore"]  = (out["fundingRate_8h"] - out["sma7d"]) / out["fundingRate_8h"].rolling(window).std()
     out["flip"]    = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
     out["has_sma"]    = out["sma7d"].notna().astype(int)
     out["has_zscore"] = out["zscore"].notna().astype(int)
@@ -144,55 +157,54 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     if not inception:
         raise ValueError(f"Inception für {symbol} fehlt.")
 
+    # Ausgabeverzeichnis & Parquet-Pfad
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
 
-    # ––––– Ermitteln, ab welchem Monat wir laden müssen –––––
+    # Historisch oder inkrementell?
     if start_date and end_date:
-        # historischer Voll-Lauf
-        download_start = start_date[:7]
-        download_end   = end_date[:7]
+        # vollständiger historischer Lauf
+        download_start = datetime.datetime.strptime(start_date, "%Y-%m-%d").date().strftime("%Y-%m")
+        download_end   = datetime.datetime.strptime(end_date,   "%Y-%m-%d").date().strftime("%Y-%m")
     else:
-        # täglicher Incremental-Lauf
-        # 1) Wenn Parquet existiert, parse letztes End-Datum aus Dateiname:
-        existing_files = glob.glob(f"{OUTPUT_DIR}/{symbol}-funding-features-*_*_to_*.parquet")
-        if existing_files:
-            latest_file = max(existing_files)
-            m = re.search(r"_to_(\d{4}-\d{2}-\d{2})", latest_file)
-            last_date = datetime.datetime.strptime(m.group(1), "%Y-%m-%d").date()
-            first_of_next = (last_date.replace(day=1) + relativedelta(months=1))
-            download_start = first_of_next.strftime("%Y-%m")
+        # inkrementeller Tageslauf
+        last_file_date = get_last_file_date(symbol)
+        if last_file_date:
+            # nächster Monat nach dem letzten File
+            next_month = (last_file_date.replace(day=1) + relativedelta(months=1))
         else:
-            # noch nie gelaufen
-            download_start = inception
-        # bis zum letzten abgeschlossenen Monat:
+            # noch kein File → ab Inception
+            year, month = map(int, inception.split("-"))
+            next_month = datetime.date(year, month, 1)
+        download_start = next_month.strftime("%Y-%m")
+        # bis zum letzten abgeschlossenen Monat
         today = datetime.date.today()
-        first_of_this = today.replace(day=1)
-        download_end = (first_of_this - relativedelta(months=1)).strftime("%Y-%m")
+        last_completed = (today.replace(day=1) - relativedelta(months=1))
+        download_end   = last_completed.strftime("%Y-%m")
 
-    # ––––– Download durchführen, wenn nötig –––––
+    # Nur neue Monate laden
     if pd.Period(download_start, "M") > pd.Period(download_end, "M"):
         logger.info(f"ℹ️ {symbol}: Kein neuer Monat zum Download ({download_start} > {download_end}).")
     else:
         download_and_unzip(symbol, "fundingRate", download_start, download_end)
         download_and_unzip(symbol, "premiumIndexKlines", download_start, download_end)
 
-    # ––––– Daten laden & Features berechnen –––––
+    # Daten zusammenführen & Features berechnen
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # ––––– Parquet schreiben oder anhängen –––––
+    # Parquet erstellen oder anhängen
     if os.path.exists(out_path):
         existing = pd.read_parquet(out_path)
         merged   = pd.concat([existing, feats]).sort_index()
         merged   = merged[~merged.index.duplicated(keep="first")]
         if len(merged) == len(existing):
-            logger.info(f"ℹ️ {symbol}: Keine neuen Zeilen – nothing to do.")
+            logger.info(f"ℹ️ {symbol}: Keine neuen Zeilen – nichts zu tun.")
             return
         save_parquet(merged, out_path)
-        logger.info(f"♻️ {symbol}: +{len(merged) - len(existing)} Zeilen angehängt")
+        logger.info(f"♻️ {symbol}: +{len(merged)-len(existing)} Zeilen angehängt")
     else:
         save_parquet(feats, out_path)
         logger.info(f"✅ {symbol}: Initial erstellt, {len(feats)} Zeilen")
