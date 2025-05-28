@@ -78,7 +78,15 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
         df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], unit="ms", utc=True, errors="coerce")
     else:
         df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], utc=True, errors="coerce")
-    
+        
+    # prüfen, ob alle wichtigen Spalten da sind
+    for col in ("percentage","depth","notional"):
+        if col not in df_raw:
+            logger.error(f"{csv_fp}: Spalte '{col}' fehlt nach Umbenennung, übersprungen")
+            empty = pd.DataFrame([], columns=["percentage","depth","notional"],
+                                 index=pd.DatetimeIndex([], tz="UTC"))
+            return empty, False
+            
     df_raw.set_index("timestamp", inplace=True)
     df_raw.sort_index(inplace=True)
     
