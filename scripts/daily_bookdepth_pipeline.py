@@ -57,9 +57,19 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     slice Daten des Tages, gebe DataFrame und has_data (bool) zurück.
     """
     if not os.path.exists(csv_fp):
-        return pd.DataFrame([], columns=["percentage","depth","notional"], index=pd.DatetimeIndex([], tz="UTC")), False
+        logger.warning(f"{csv_fp}: Datei fehlt, übersprungen")
+        empty = pd.DataFrame([], columns=["percentage","depth","notional"],
+                             index=pd.DatetimeIndex([], tz="UTC"))
+        return empty, False
     
-    df_raw = pd.read_csv(csv_fp)
+    try:
+        df_raw = pd.read_csv(csv_fp)
+    except Exception as e:
+        logger.error(f"{csv_fp}: Fehler beim Einlesen: {e}")
+        empty = pd.DataFrame([], columns=["percentage","depth","notional"],
+                             index=pd.DatetimeIndex([], tz="UTC"))
+        return empty, False
+        
     if str(df_raw.columns[0]).isdigit():
         df_raw.columns = ["timestamp","percentage","depth","notional"]
     
