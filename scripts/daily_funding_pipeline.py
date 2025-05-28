@@ -55,7 +55,10 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
 
 def download_and_unzip(symbol: str, kind: str, start: str, end: str):
     base_url = "https://data.binance.vision/data/futures/um/monthly"
-    out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
+    if kind == "premiumIndexKlines":
+         out_dir = f"{LOCAL_BASE}/{kind}/{symbol}/1h"
+     else:
+         out_dir = f"{LOCAL_BASE}/{kind}/{symbol}" 
     os.makedirs(out_dir, exist_ok=True)
     curr = pd.Period(start, "M")
     last = pd.Period(end, "M")
