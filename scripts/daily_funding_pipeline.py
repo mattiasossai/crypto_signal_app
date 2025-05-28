@@ -8,11 +8,25 @@ import subprocess
 import pandas as pd
 import numpy as np
 import datetime
-from utils import init_logger, save_parquet
+import logging
+
+# ── Integrierte Logger- und Speicher-Funktionen (war vorher in utils.py) ──
+def init_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    if not logger.hasHandlers():
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s"))
+        logger.addHandler(h)
+    return logger
+
+def save_parquet(df: pd.DataFrame, path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    df.to_parquet(path, engine="pyarrow", compression="snappy")
 
 logger = init_logger("funding_pipeline")
 
-# --- Verzeichnisse & Inception ---
+# ── Konfiguration ──
 LOCAL_BASE   = "data/futures/um/monthly"
 OUTPUT_DIR   = "features/funding"
 SYMBOL_START = {
@@ -23,8 +37,6 @@ SYMBOL_START = {
     "SOLUSDT": "2020-09",
     "ENAUSDT": "2024-04",
 }
-
-# --- Feature-Parameter ---
 ROLL_HOURS = 8
 SMA_DAYS   = 7
 
@@ -43,14 +55,9 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
     return sorted(glob.glob(f"{path}/{pattern}"))
 
 def download_and_unzip(symbol: str, kind: str, start: str, end: str):
-    """
-    Historischer Download von Binance-ZIPs zwischen start (YYYY-MM) und end (YYYY-MM).
-    """
     base_url = "https://data.binance.vision/data/futures/um/monthly"
     out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
     os.makedirs(out_dir, exist_ok=True)
-
-    # Monate von start bis end bestimmen
     curr = pd.Period(start, "M")
     last = pd.Period(end, "M")
     while curr <= last:
@@ -67,12 +74,11 @@ def download_and_unzip(symbol: str, kind: str, start: str, end: str):
         logger.info(f"→ DOWNLOAD {zip_name}")
         res = subprocess.run(["curl","-sSf",url,"-o","tmp.zip"], capture_output=True)
         if res.returncode == 0:
-            # unzip and write to dst
             subprocess.run(["unzip","-p","tmp.zip"], stdout=open(dst,"wb"), check=True)
             os.remove("tmp.zip")
         else:
             logger.warning(f"{zip_name} nicht gefunden")
-        curr += 1  # nächster Monat
+        curr += 1
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
     files = list_monthly_files(symbol, "fundingRate")
@@ -88,8 +94,7 @@ def load_and_concat_funding(symbol: str) -> pd.DataFrame:
         dfs.append(df.set_index("fundingtime")[["fundingrate"]])
     if not dfs:
         raise ValueError("Keine Funding-Dateien gefunden.")
-    all_df = pd.concat(dfs).sort_index().drop_duplicates()
-    return all_df
+    return pd.concat(dfs).sort_index().drop_duplicates()
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_monthly_files(symbol, "premiumIndexKlines")
@@ -101,24 +106,23 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
         cols = [c.lower() for c in df.columns]
         df.columns = [c.replace("opentime","open_time").replace("closetime","close") for c in cols]
         if not set(expected).issubset(df.columns):
-            df = pd.read_csv(fn, header=None, names=expected + df.columns[len(expected):])
+            df = pd.read_csv(fn, header=None, names=expected+df.columns[len(expected):])
         check_columns(df, ["open_time","close"], fn)
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
         frames.append(df.set_index("open_time")["close"])
     if not frames:
         raise ValueError("Keine Premium-Index-Dateien gefunden.")
     all_prem = pd.concat(frames).sort_index().drop_duplicates()
-    all_prem = all_prem.reindex(idx, method="ffill")
-    return all_prem
+    return all_prem.reindex(idx, method="ffill")
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     hourly = fund_df["fundingrate"].resample("1h").mean().ffill()
     out = pd.DataFrame({"fundingRate": hourly})
     out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
     window = SMA_DAYS * 24
-    out["sma7d"]  = out["fundingRate_8h"].rolling(window).mean()
-    out["zscore"] = (out["fundingRate_8h"] - out["sma7d"]) / out["fundingRate_8h"].rolling(window).std()
-    out["flip"]   = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
+    out["sma7d"]   = out["fundingRate_8h"].rolling(window).mean()
+    out["zscore"]  = (out["fundingRate_8h"] - out["sma7d"]) / out["fundingRate_8h"].rolling(window).std()
+    out["flip"]    = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
     out["has_sma"]    = out["sma7d"].notna().astype(int)
     out["has_zscore"] = out["zscore"].notna().astype(int)
     out["sma7d"]  = out["sma7d"].fillna(0)
@@ -131,55 +135,46 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
 
 def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     logger.info(f"=== Verarbeitung {symbol} ===")
+    inception = SYMBOL_START.get(symbol)
+    if not inception:
+        raise ValueError(f"Inception für {symbol} fehlt.")
 
-    # a) Zeitrange festlegen
+    # Zeitrange
     if start_date and end_date:
         sd = pd.to_datetime(start_date).tz_localize("UTC")
         ed = pd.to_datetime(end_date).tz_localize("UTC")
     else:
-        # Wenn kein Zeitraum, holen wir alles ab Inception
         sd = None
         ed = pd.Timestamp(datetime.datetime.utcnow().date()).tz_localize("UTC")
 
-    # b) Inception und Resume-Logik
-    inception = SYMBOL_START.get(symbol)
-    if inception is None:
-        raise ValueError(f"Inception für {symbol} fehlt.")
-    if sd is None:
-        # historical oder daily resume
-        out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
-    else:
-        out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
 
-    # Download & Laden
-    os.makedirs(LOCAL_BASE + "/fundingRate/" + symbol, exist_ok=True)
+    # Download
     download_and_unzip(symbol, "fundingRate", inception, ed.strftime("%Y-%m"))
     download_and_unzip(symbol, "premiumIndexKlines", inception, ed.strftime("%Y-%m"))
 
+    # Load & Compute
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # --- Write & Early Exit Logic ---
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+    # Write oder Early-Exit
     if os.path.exists(out_path):
         existing = pd.read_parquet(out_path)
         merged   = pd.concat([existing, feats]).sort_index()
         merged   = merged[~merged.index.duplicated(keep="first")]
 
-        # ✋ keine Änderung? abbrechen
         if len(merged) == len(existing):
             logger.info(f"ℹ️ {symbol}: Keine neuen Funding-Daten – nichts zu tun.")
             return
 
         save_parquet(merged, out_path)
-        added = len(merged) - len(existing)
-        logger.info(f"♻️ {symbol}: Funding-Parquet aktualisiert, +{added} Zeilen")
+        logger.info(f"♻️ {symbol}: +{len(merged)-len(existing)} Zeilen angehängt")
     else:
         save_parquet(feats, out_path)
-        logger.info(f"✅ {symbol}: Initiales Funding-Parquet erstellt, {len(feats)} Zeilen")
+        logger.info(f"✅ {symbol}: Initial erstellt, {len(feats)} Zeilen")
 
 def main():
     p = argparse.ArgumentParser()
