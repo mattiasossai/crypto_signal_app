@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import glob
+import gzip
 import argparse
 import subprocess
 import pandas as pd
@@ -8,7 +9,7 @@ import numpy as np
 import datetime
 import logging
 
-
+# ── Integrierte Logger- und Speicher-Funktionen (aus utils.py geklont) ──
 def init_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
@@ -18,8 +19,13 @@ def init_logger(name: str) -> logging.Logger:
         logger.addHandler(h)
     return logger
 
+def save_parquet(df: pd.DataFrame, path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    df.to_parquet(path, engine="pyarrow", compression="snappy")
+
 logger = init_logger("funding_pipeline")
 
+# ── Konfiguration ──
 LOCAL_BASE   = "data/futures/um/monthly"
 OUTPUT_DIR   = "features/funding"
 SYMBOL_START = {
@@ -33,162 +39,133 @@ SYMBOL_START = {
 ROLL_HOURS = 8
 SMA_DAYS   = 7
 
+def check_columns(df: pd.DataFrame, required: list[str], fn: str):
+    miss = [c for c in required if c not in df.columns]
+    if miss:
+        raise ValueError(f"{fn}: Fehlende Spalten {miss}")
 
 def list_monthly_files(symbol: str, kind: str) -> list[str]:
+    path = f"{LOCAL_BASE}/{kind}/{symbol}"
     if kind == "premiumIndexKlines":
-        path = f"{LOCAL_BASE}/premiumIndexKlines/{symbol}/1h"
+        path += "/1h"
         pattern = f"{symbol}-1h-*.csv"
-    elif kind == "fundingRate":
-        path = f"{LOCAL_BASE}/fundingRate/{symbol}"
-        pattern = f"{symbol}-fundingRate-*.csv"
     else:
-        raise ValueError("kind muss 'fundingRate' oder 'premiumIndexKlines' sein.")
+        pattern = f"{symbol}-fundingRate-*.csv"
     return sorted(glob.glob(f"{path}/{pattern}"))
 
-
-def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
+def download_and_unzip(symbol: str, kind: str, start: str, end: str):
     base_url = "https://data.binance.vision/data/futures/um/monthly"
-    if kind == "fundingRate":
-        out_dir = f"{LOCAL_BASE}/fundingRate/{symbol}"
-        zip_name = f"{symbol}-fundingRate-{month}.zip"
-        url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
-        dst = f"{out_dir}/{symbol}-fundingRate-{month}.csv"
-    else:
-        out_dir = f"{LOCAL_BASE}/premiumIndexKlines/{symbol}/1h"
-        zip_name = f"{symbol}-1h-{month}.zip"
-        url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
-        dst = f"{out_dir}/{symbol}-1h-{month}.csv"
+    out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
     os.makedirs(out_dir, exist_ok=True)
-    logger.info(f"→ Prüfe {zip_name}")
-    res = subprocess.run(["curl", "-f", "-s", url, "-o", os.devnull])
-    if res.returncode != 0:
-        logger.info(f"   ❌ {zip_name} nicht gefunden")
-        return False
-    logger.info(f"   ✔️ vorhanden, lade…")
-    res = subprocess.run(["curl", "-sSf", url, "-o", "tmp.zip"], capture_output=True)
-    if res.returncode == 0:
-        subprocess.run(["unzip", "-p", "tmp.zip"], stdout=open(dst, "wb"), check=True)
-        os.remove("tmp.zip")
-        logger.info(f"   ✅ {dst}")
-        return True
-    logger.warning(f"   ⚠️ Download von {zip_name} fehlgeschlagen")
-    return False
+    curr = pd.Period(start, "M")
+    last = pd.Period(end, "M")
+    while curr <= last:
+        per = curr.strftime("%Y-%m")
+        if kind == "fundingRate":
+            zip_name = f"{symbol}-fundingRate-{per}.zip"
+            url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
+            dst = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
+        else:
+            zip_name = f"{symbol}-1h-{per}.zip"
+            url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
+            dst = f"{out_dir}/{symbol}-1h-{per}.csv"
 
+        logger.info(f"→ DOWNLOAD {zip_name}")
+        res = subprocess.run(["curl","-sSf",url,"-o","tmp.zip"], capture_output=True)
+        if res.returncode == 0:
+            subprocess.run(["unzip","-p","tmp.zip"], stdout=open(dst,"wb"), check=True)
+            os.remove("tmp.zip")
+        else:
+            logger.warning(f"{zip_name} nicht gefunden")
+        curr += 1
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
     files = list_monthly_files(symbol, "fundingRate")
-    frames = []
+    dfs = []
     for fn in files:
         logger.info(f"Lade Funding-CSV {fn}")
-        df = pd.read_csv(fn, header=0)
-
-        # Header-Robustheit: verschiedene Varianten mappen
-        colmap = {c.lower(): c for c in df.columns}
-        # map calc_time, fundingtime, timestamp → timestamp
-        if 'calc_time' in colmap:
-            df.rename(columns={colmap['calc_time']: 'timestamp'}, inplace=True)
-        elif 'fundingtime' in colmap:
-            df.rename(columns={colmap['fundingtime']: 'timestamp'}, inplace=True)
-        elif 'timestamp' in colmap:
-            df.rename(columns={colmap['timestamp']: 'timestamp'}, inplace=True)
-        # map last_funding_rate, funding_rate, fundingrate → fundingRate
-        if 'last_funding_rate' in colmap:
-            df.rename(columns={colmap['last_funding_rate']: 'fundingRate'}, inplace=True)
-        elif 'funding_rate' in colmap:
-            df.rename(columns={colmap['funding_rate']: 'fundingRate'}, inplace=True)
-        elif 'fundingrate' in colmap:
-            df.rename(columns={colmap['fundingrate']: 'fundingRate'}, inplace=True)
-
-        # falls immer noch fehlen, skip
-        if not {'timestamp','fundingRate'}.issubset(df.columns):
-            logger.error(f"{fn}: Fehlende Spalten nach Umbenennung! Header = {list(df.columns)}")
-            continue
-
-        # Zeitkonvertierung und Index
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True, errors='coerce')
-        df.set_index('timestamp', inplace=True)
-        df.sort_index(inplace=True)
-        frames.append(df[['fundingRate']])
-
-    if not frames:
-        raise ValueError("Keine fundingRate-CSV-Dateien mit gültigem Header gefunden.")
-    all_fund = pd.concat(frames).sort_index().drop_duplicates()
-    return all_fund
-
+        opener = gzip.open if fn.endswith(".gz") else open
+        df = pd.read_csv(opener(fn, "rt"))
+        df.columns = [c.lower() for c in df.columns]
+        check_columns(df, ["calc_time","funding_interval_hours","last_funding_rate"], fn)
+        df["fundingtime"] = pd.to_datetime(df["calc_time"], unit="ms", utc=True, errors="coerce")
+        df["fundingrate"] = df["last_funding_rate"]
+        dfs.append(df.set_index("fundingtime")[["fundingrate"]])
+    if not dfs:
+        raise ValueError("Keine Funding-Dateien gefunden.")
+    return pd.concat(dfs).sort_index().drop_duplicates()
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_monthly_files(symbol, "premiumIndexKlines")
+    expected = ["open_time","open","close"]
     frames = []
     for fn in files:
         logger.info(f"Lade Premium-Index-CSV {fn}")
-        df = pd.read_csv(fn, header=0)
-        colmap = {c.lower(): c for c in df.columns}
-        # map opentime variants → open_time
-        if 'open_time' in colmap:
-            df.rename(columns={colmap['open_time']:'open_time'}, inplace=True)
-        elif 'opentime' in colmap:
-            df.rename(columns={colmap['opentime']:'open_time'}, inplace=True)
-        # map closet variants → close
-        if 'close' in colmap:
-            df.rename(columns={colmap['close']:'close'}, inplace=True)
-        elif 'closetime' in colmap:
-            df.rename(columns={colmap['closetime']:'close'}, inplace=True)
-        if not {'open_time','close'}.issubset(df.columns):
-            logger.error(f"{fn}: Fehlende Spalten nach Umbenennung! Header = {list(df.columns)}")
-            continue
-        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True, errors='coerce')
-        frames.append(df.set_index('open_time')['close'])
+        df = pd.read_csv(fn)
+        cols = [c.lower() for c in df.columns]
+        df.columns = [c.replace("opentime","open_time").replace("closetime","close") for c in cols]
+        if not set(expected).issubset(df.columns):
+            df = pd.read_csv(fn, header=None, names=expected+df.columns[len(expected):])
+        check_columns(df, ["open_time","close"], fn)
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
+        frames.append(df.set_index("open_time")["close"])
     if not frames:
-        raise ValueError("Keine premiumIndexKlines-CSV-Dateien mit gültigem Header gefunden.")
+        raise ValueError("Keine Premium-Index-Dateien gefunden.")
     all_prem = pd.concat(frames).sort_index().drop_duplicates()
-    return all_prem.reindex(idx, method='ffill')
-
+    return all_prem.reindex(idx, method="ffill")
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
-    hourly = fund_df['fundingRate'].resample('1h').mean().ffill()
-    out = pd.DataFrame({'fundingRate': hourly})
-    out['fundingRate_8h'] = out['fundingRate'].rolling(ROLL_HOURS).sum()
-    w = SMA_DAYS*24
-    out['sma7d']  = out['fundingRate_8h'].rolling(w).mean()
-    out['zscore'] = (out['fundingRate_8h']-out['sma7d'])/out['fundingRate_8h'].rolling(w).std()
-    out['flip']   = np.sign(out['fundingRate_8h']).diff().abs().fillna(0).astype(int)
-    out['has_sma']    = out['sma7d'].notna().astype(int)
-    out['has_zscore'] = out['zscore'].notna().astype(int)
-    out['sma7d']  = out['sma7d'].fillna(0)
-    out['zscore'] = out['zscore'].fillna(0)
-    out['flip_cumsum']      = out['flip'].cumsum()
-    out['hours_since_flip'] = out.groupby('flip_cumsum').cumcount()
-    out.drop(columns='flip_cumsum', inplace=True)
-    out['basis'] = np.nan
+    hourly = fund_df["fundingrate"].resample("1h").mean().ffill()
+    out = pd.DataFrame({"fundingRate": hourly})
+    out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
+    window = SMA_DAYS * 24
+    out["sma7d"]   = out["fundingRate_8h"].rolling(window).mean()
+    out["zscore"]  = (out["fundingRate_8h"] - out["sma7d"]) / out["fundingRate_8h"].rolling(window).std()
+    out["flip"]    = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
+    out["has_sma"]    = out["sma7d"].notna().astype(int)
+    out["has_zscore"] = out["zscore"].notna().astype(int)
+    out["sma7d"]  = out["sma7d"].fillna(0)
+    out["zscore"] = out["zscore"].fillna(0)
+    out["flip_cumsum"]      = out["flip"].cumsum()
+    out["hours_since_flip"] = out.groupby("flip_cumsum").cumcount()
+    out.drop(columns="flip_cumsum", inplace=True)
+    out["basis"] = np.nan
     return out
-
 
 def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
     logger.info(f"=== Verarbeitung {symbol} ===")
-    pattern = os.path.join(OUTPUT_DIR, f"{symbol}-funding-features-*.parquet")
-    files = sorted(glob.glob(pattern))
+    inception = SYMBOL_START[symbol]
 
-    # Start-/End-Logik (Full vs. Incremental) ähnlich wie vorher...
-    # (unverändert)
+    # Zeitraum bestimmen
+    if start_date and end_date:
+        sd = start_date[:7]
+        ed = end_date[:7]
+    else:
+        sd = inception
+        ed = (datetime.datetime.utcnow().date() - datetime.timedelta(days=1)).strftime("%Y-%m")
 
-    # Nach Download:
+    # Download
+    download_and_unzip(symbol, "fundingRate", sd, ed)
+    download_and_unzip(symbol, "premiumIndexKlines", sd, ed)
+
+    # Laden & Features
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
-    feats['basis'] = prem
+    feats["basis"] = prem
 
-    # Parquet schreiben und Clean‑Up (nur aktuelles behalten)
-    # (unverändert)
-
+    # Speichern
+    out_path = f"{OUTPUT_DIR}/{symbol}-funding-features-{sd}_to_{ed}.parquet"
+    save_parquet(feats, out_path)
+    logger.info(f"✅ {symbol}: geschrieben {len(feats)} Zeilen nach {out_path}")
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--symbol',    required=True)
-    p.add_argument('--start-date',default=None)
-    p.add_argument('--end-date',  default=None)
+    p.add_argument("--symbol",     required=True)
+    p.add_argument("--start-date", default=None)
+    p.add_argument("--end-date",   default=None)
     args = p.parse_args()
     process_symbol(args.symbol, args.start_date, args.end_date)
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
