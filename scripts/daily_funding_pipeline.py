@@ -55,10 +55,13 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
 
 def download_and_unzip(symbol: str, kind: str, start: str, end: str):
     base_url = "https://data.binance.vision/data/futures/um/monthly"
+    # out_dir je nach Kind anpassen, damit die premium-Dateien
+    # wirklich in …/1h/ landen
     if kind == "premiumIndexKlines":
-         out_dir = f"{LOCAL_BASE}/{kind}/{symbol}/1h"
-     else:
-         out_dir = f"{LOCAL_BASE}/{kind}/{symbol}" 
+        out_dir = f"{LOCAL_BASE}/{kind}/{symbol}/1h"
+    else:
+        out_dir = f"{LOCAL_BASE}/{kind}/{symbol}"
+
     os.makedirs(out_dir, exist_ok=True)
     curr = pd.Period(start, "M")
     last = pd.Period(end, "M")
@@ -66,20 +69,20 @@ def download_and_unzip(symbol: str, kind: str, start: str, end: str):
         per = curr.strftime("%Y-%m")
         if kind == "fundingRate":
             zip_name = f"{symbol}-fundingRate-{per}.zip"
-            url = f"{base_url}/fundingRate/{symbol}/{zip_name}"
-            dst = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
+            url      = f"{base_url}/fundingRate/{symbol}/{zip_name}"
+            dst      = f"{out_dir}/{symbol}-fundingRate-{per}.csv"
         else:
             zip_name = f"{symbol}-1h-{per}.zip"
-            url = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
-            dst = f"{out_dir}/{symbol}-1h-{per}.csv"
+            url      = f"{base_url}/premiumIndexKlines/{symbol}/1h/{zip_name}"
+            dst      = f"{out_dir}/{symbol}-1h-{per}.csv"
 
         logger.info(f"→ DOWNLOAD {zip_name}")
-        res = subprocess.run(["curl","-sSf",url,"-o","tmp.zip"], capture_output=True)
+        res = subprocess.run(["curl", "-sSf", url, "-o", "tmp.zip"], capture_output=True)
         if res.returncode == 0:
-            subprocess.run(["unzip","-p","tmp.zip"], stdout=open(dst,"wb"), check=True)
+            subprocess.run(["unzip", "-p", "tmp.zip"], stdout=open(dst, "wb"), check=True)
             os.remove("tmp.zip")
         else:
-            logger.warning(f"{zip_name} nicht gefunden")
+            logger.warning(f"{zip_name} nicht gefunden und übersprungen")
         curr += 1
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
