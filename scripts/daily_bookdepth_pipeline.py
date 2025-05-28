@@ -272,7 +272,12 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     tmp_out_file = os.path.join(out_dir, f"{symbol}-features-temp.parquet")
     df_upd.to_parquet(tmp_out_file, compression="snappy")
 
-    # 2. Ermittle echten Namen & benenne um
+    # 2. Lösche alle alten Parquets (außer temp)
+    for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
+        if old != tmp_out_file:
+            os.remove(old)
+
+    # 3. Benenne temporäres File in finalen Namen um
     real_sd = df_upd.index.min().date()
     real_ed = df_upd.index.max().date()
     final_out_file = os.path.join(
@@ -280,11 +285,6 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         f"{symbol}-features-{real_sd}_to_{real_ed}.parquet"
     )
     os.rename(tmp_out_file, final_out_file)
-
-    # 3. Jetzt ALLE anderen alten Parquets entfernen
-    for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
-        if old != final_out_file:
-            os.remove(old)
 
     print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
 
