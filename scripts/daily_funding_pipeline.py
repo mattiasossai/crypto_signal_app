@@ -150,7 +150,7 @@ def load_and_concat_funding(symbol: str) -> pd.DataFrame:
     for fn in files:
         logger.info(f"Lade Funding-CSV {fn}")
         try:
-            df = read_csv_flexible(fn, "fundingRate")
+            df = read_csv_robust(fn, "fundingRate")
         except Exception as e:
             logger.error(f"{fn}: {e}")
             continue
@@ -166,7 +166,7 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     for fn in files:
         logger.info(f"Lade Premium-Index-CSV {fn}")
         try:
-            df = read_csv_flexible(fn, "premiumIndexKlines")
+            df = read_csv_robust(fn, "premiumIndexKlines")
         except Exception as e:
             logger.error(f"{fn}: {e}")
             continue
