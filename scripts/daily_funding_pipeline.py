@@ -2,7 +2,6 @@
 import os
 import glob
 import gzip
-import re
 import argparse
 import subprocess
 import pandas as pd
@@ -142,42 +141,40 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     if not inception:
         raise ValueError(f"Inception für {symbol} fehlt.")
 
-    # Determine resume vs full historical
+    # sicherstellen, dass OUTPUT_DIR existiert
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = f"{OUTPUT_DIR}/{symbol}-funding-features.parquet"
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    # bestimmen, welche Monatspakete geladen werden
     if start_date and end_date:
-        # full historical run
+        # kompletter historischer Lauf
         download_start = start_date[:7]
         download_end   = end_date[:7]
     else:
-        # daily incremental
+        # inkrementeller Tageslauf
         if os.path.exists(out_path):
             existing = pd.read_parquet(out_path)
             last_ts = existing.index.max()
-            # next month after the last timestamp
             download_start = (last_ts.to_period("M") + 1).strftime("%Y-%m")
         else:
             download_start = inception
-        # up to last completed month
-        download_end = (pd.Timestamp.utcnow().to_period("M") - 1).strftime("%Y-%m")
+        # bis zum letzten abgeschlossenen Monat (ohne Zeitzonen-Warnung)
+        download_end = (pd.Period(datetime.datetime.utcnow(), "M") - 1).strftime("%Y-%m")
 
-    # if nothing new to fetch
+    # keine neuen Monate?
     if pd.Period(download_start, "M") > pd.Period(download_end, "M"):
         logger.info(f"ℹ️ {symbol}: Kein neuer Monat zum Download ({download_start} > {download_end}).")
     else:
-        # Download only needed months
         download_and_unzip(symbol, "fundingRate", download_start, download_end)
         download_and_unzip(symbol, "premiumIndexKlines", download_start, download_end)
 
-    # Load & Compute
+    # Daten zusammenführen und Features berechnen
     df_fund = load_and_concat_funding(symbol)
     feats   = compute_features(df_fund)
     prem    = load_and_concat_premium(symbol, feats.index)
     feats["basis"] = prem
 
-    # Write or append
+    # in Parquet schreiben oder anhängen
     if os.path.exists(out_path):
         existing = pd.read_parquet(out_path)
         merged   = pd.concat([existing, feats]).sort_index()
@@ -186,7 +183,7 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
             logger.info(f"ℹ️ {symbol}: Keine neuen Zeilen – nothing to do.")
             return
         save_parquet(merged, out_path)
-        logger.info(f"♻️ {symbol}: +{len(merged)-len(existing)} Zeilen angehängt")
+        logger.info(f"♻️ {symbol}: +{len(merged) - len(existing)} Zeilen angehängt")
     else:
         save_parquet(feats, out_path)
         logger.info(f"✅ {symbol}: Initial erstellt, {len(feats)} Zeilen")
