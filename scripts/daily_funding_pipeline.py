@@ -50,7 +50,6 @@ def list_monthly_files(symbol: str, kind: str) -> list[str]:
     return sorted(glob.glob(f"{path}/{pattern}"))
 
 def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
-    """Lädt **eine** Monatsdatei (zip) herunter und entpackt sie, falls vorhanden."""
     base_url = "https://data.binance.vision/data/futures/um/monthly"
     if kind == "fundingRate":
         out_dir = f"{LOCAL_BASE}/fundingRate/{symbol}"
@@ -64,10 +63,8 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
         dst = f"{out_dir}/{symbol}-1h-{month}.csv"
     else:
         raise ValueError("kind muss 'fundingRate' oder 'premiumIndexKlines' sein.")
-
     os.makedirs(out_dir, exist_ok=True)
     logger.info(f"→ Prüfe {zip_name}")
-    # Echte Existenzprüfung via Download-Versuch ins Nirwana
     res = subprocess.run(["curl", "-f", "-s", url, "-o", os.devnull])
     if res.returncode != 0:
         logger.info(f"   ❌ {zip_name} nicht gefunden")
@@ -83,36 +80,27 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
         logger.warning(f"   ⚠️ Download von {zip_name} fehlgeschlagen")
         return False
 
-def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
-    files = list_monthly_files(symbol, "premiumIndexKlines")
+def load_and_concat_funding(symbol: str) -> pd.DataFrame:
+    """Lädt alle vorhandenen Funding-CSV-Dateien für ein Symbol und gibt einen DataFrame zurück."""
+    files = list_monthly_files(symbol, "fundingRate")
     frames = []
     for fn in files:
-        logger.info(f"Lade Premium-Index-CSV {fn}")
+        logger.info(f"Lade Funding-CSV {fn}")
         df = pd.read_csv(fn)
-        # Mapping auf erwartete Namen
-        colmap = {c.lower(): c for c in df.columns}
-        # Versuche verschiedene mögliche Namen für open_time und close
-        if "open_time" not in colmap:
-            # z.B. OpenTime, opentime, ... (je nach CSV-Version)
-            for alt in ["opentime", "OpenTime"]:
-                if alt in colmap:
-                    df.rename(columns={alt: "open_time"}, inplace=True)
-        if "close" not in colmap:
-            # z.B. Close, closeprice etc.
-            for alt in ["Close", "closeprice"]:
-                if alt in colmap:
-                    df.rename(columns={alt: "close"}, inplace=True)
-        # Nach dem Mapping: Check, ob beide Spalten da sind
-        if "open_time" not in df.columns or "close" not in df.columns:
-            logger.error(f"{fn}: Fehlende Spalten – erwartet ['open_time', 'close']")
-            continue
-        # Konvertierung und Index setzen
-        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
-        frames.append(df.set_index("open_time")["close"])
+        if "fundingTime" in df.columns:
+            df.rename(columns={"fundingTime": "timestamp"}, inplace=True)
+        if "fundingRate" not in df.columns:
+            # Versuche verschiedene mögliche Spaltennamen (Fallback)
+            for alt in ["fundingrate", "FundingRate"]:
+                if alt in df.columns:
+                    df.rename(columns={alt: "fundingRate"}, inplace=True)
+        check_columns(df, ["timestamp", "fundingRate"], fn)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+        frames.append(df.set_index("timestamp")[["fundingRate"]])
     if not frames:
-        raise ValueError("Keine Premium-Index-Dateien gefunden.")
-    all_prem = pd.concat(frames).sort_index().drop_duplicates()
-    return all_prem.reindex(idx, method="ffill")
+        raise ValueError("Keine Funding-Rate-Dateien gefunden.")
+    all_fund = pd.concat(frames).sort_index().drop_duplicates()
+    return all_fund
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_monthly_files(symbol, "premiumIndexKlines")
@@ -134,7 +122,7 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     return all_prem.reindex(idx, method="ffill")
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
-    hourly = fund_df["fundingrate"].resample("1h").mean().ffill()
+    hourly = fund_df["fundingRate"].resample("1h").mean().ffill()
     out = pd.DataFrame({"fundingRate": hourly})
     out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
     window = SMA_DAYS * 24
@@ -228,7 +216,7 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     feats.to_parquet(out_file, engine="pyarrow", compression="snappy")
     logger.info(f"✅ Neues Parquet gespeichert: {out_file}")
 
-    # Alte Parquets löschen, nur aktuelles behalten
+    # Clean-Up: Nur das aktuelle Parquet behalten
     for old in glob.glob(pattern):
         if old != out_file:
             os.remove(old)
