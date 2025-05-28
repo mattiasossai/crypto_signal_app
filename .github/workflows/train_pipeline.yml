@@ -2,9 +2,7 @@ name: 🏋️‍♂️ Train & Backtest Pipeline
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 1 * *'  # monatlich am 1. um 02:00 UTC
-
+  
 jobs:
   train:
     runs-on: ubuntu-latest
