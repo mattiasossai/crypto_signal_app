@@ -3,7 +3,7 @@ name: 🔟⏰✅💰Funding Features Incremental
 on:
   schedule:
     # Nur am 20. jeden Monats um 02:00 UTC
-    - cron: '0 2 20 * *'
+    - cron: '0 2 27 * *'
   workflow_dispatch:
     inputs:
       start-date:
