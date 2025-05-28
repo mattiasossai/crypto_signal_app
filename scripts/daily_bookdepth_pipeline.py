@@ -272,10 +272,12 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     tmp_out_file = os.path.join(out_dir, f"{symbol}-features-temp.parquet")
     df_upd.to_parquet(tmp_out_file, compression="snappy")
 
-    # 2. Lösche alle alten Parquets (außer temp)
+    # 2. Lösche alle alten Parquets (außer temp) und sammle sie
+    removed = []
     for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
         if old != tmp_out_file:
             os.remove(old)
+            removed.append(old)
 
     # 3. Benenne temporäres File in finalen Namen um
     real_sd = df_upd.index.min().date()
@@ -286,8 +288,14 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     )
     os.rename(tmp_out_file, final_out_file)
 
-    print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
+    # 4. Git-Staging: füge neues File hinzu und entferne die alten
+    import subprocess
+    subprocess.run(["git", "add", final_out_file], check=True)
+    for old in removed:
+        subprocess.run(["git", "rm", "--quiet", old], check=True)
 
+    print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
+    
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol",      required=True)
@@ -295,6 +303,7 @@ def main():
     p.add_argument("--end-date",    default=None)
     args = p.parse_args()
     process_symbol(args.symbol, args.start_date, args.end_date)
+
 
 if __name__ == "__main__":
     main()
