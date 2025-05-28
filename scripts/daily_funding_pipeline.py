@@ -80,103 +80,86 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
 def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
     """
     Liest FundingRate- oder PremiumIndexKlines-CSV ein,
-    erkennt headerlose Dateien und normalisiert die Spalten.
-    Gibt einen DataFrame mit UTC-Index "timestamp" zurück und:
-      - kind="fundingRate": Spalte "fundingRate"
-      - kind="premiumIndexKlines": Spalte "close"
+    erkennt headerlose Dateien und normalisiert:
+      • Index: UTC-Datetime aus 'timestamp'
+      • kind='fundingRate'       → Spalte 'fundingRate'
+      • kind='premiumIndexKlines'→ Spalte 'close'
+    Unterstützt:
+      • headerless CSVs
+      • verschiedene Header-Varianten (camelCase, snake_case, alte & neue Namen)
+      • wechselnde Reihenfolge oder zusätzliche Spalten
     """
 
-    # 1) Probezeile einlesen, um headerless zu erkennen
+    # 1) Prüfen, ob headerlos (nur Zahlen in der ersten Zeile)
     sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
     headerless = all(str(x).replace('.', '', 1).lstrip('-').isdigit() for x in sample)
 
-    # 2) Komplettes Einlesen (mit oder ohne Header)
-    if headerless:
-        df = pd.read_csv(path, header=None)
-    else:
-        df = pd.read_csv(path)
-    cols = [str(c).lower() for c in df.columns]
+    # 2) Datei einlesen
+    df = pd.read_csv(path, header=None if headerless else 0)
+
+    # 3) Normierte Spaltenzuordnung: key = lower ohne Unterstriche, value = orig name/index
+    norm_map = {}
+    for col in df.columns:
+        name = str(col)
+        key = re.sub(r"[_\s]", "", name.lower())
+        norm_map[key] = col
 
     if kind == "fundingRate":
-        # ── FUNDING RATE ──────────────────────────────────────────
-        expected = ["calc_time", "funding_interval_hours", "last_funding_rate"]
-
+        # ── FUNDING RATE ─────────────────────────────────────────────────
         if headerless:
-            # Spalten namen und ggf. kürzen
-            names = expected[:df.shape[1]]
-            df.columns = names
-            # Umbenennen in intern genutzte Namen
-            df = df.rename(columns={
-                "calc_time":    "timestamp",
-                "last_funding_rate": "fundingRate"
-            })
-        else:
-            # Variante mit aktuellem Header
-            if {"calc_time", "last_funding_rate"}.issubset(cols):
-                df = df.rename(columns={
-                    df.columns[cols.index("calc_time")]       : "timestamp",
-                    df.columns[cols.index("last_funding_rate")]: "fundingRate"
-                })
-            else:
-                # Fallback auf ältere Feldnamen
-                colmap = {c.lower(): c for c in df.columns}
-                for alt in ("timestamp", "fundingtime", "funding_time"):
-                    if alt in colmap:
-                        df = df.rename(columns={colmap[alt]: "timestamp"})
-                        break
-                for alt in ("funding_rate", "fundingrate", "last_funding_rate"):
-                    if alt in colmap:
-                        df = df.rename(columns={colmap[alt]: "fundingRate"})
-                        break
+            # headerlose Variante: erwarten (timestamp-ms, interval, rate)
+            df.columns = ["timestamp", "funding_interval_hours", "last_funding_rate"][:df.shape[1]]
 
-        # Nur diese beiden Spalten behalten
+        # nun suchen wir per norm_map:
+        # mögliche Timestamp-Keys: "calctime", "timestamp", "fundingtime"
+        for k in ("calctime", "timestamp", "fundingtime"):
+            if k in norm_map:
+                ts_col = norm_map[k]; break
+        else:
+            raise ValueError(f"{path}: Konnte kein Timestamp-Feld finden ({list(norm_map)})")
+
+        # mögliche Rate-Keys: "lastfundingrate", "fundingrate"
+        for k in ("lastfundingrate", "fundingrate"):
+            if k in norm_map:
+                fr_col = norm_map[k]; break
+        else:
+            raise ValueError(f"{path}: Konnte kein FundingRate-Feld finden ({list(norm_map)})")
+
+        df = df.rename(columns={ts_col: "timestamp", fr_col: "fundingRate"})
         df = df[["timestamp", "fundingRate"]]
-        required = {"timestamp", "fundingRate"}
 
     else:
-        # ── PREMIUM INDEX KLINES ────────────────────────────────
-        expected = [
-            "open_time","open","high","low","close","volume",
-            "close_time","quote_volume","count",
-            "taker_buy_volume","taker_buy_quote_volume","ignore"
-        ]
-
+        # ── PREMIUM INDEX KLINES ───────────────────────────────────────────
         if headerless:
-            # Spaltennamen zuweisen und kürzen
-            if df.shape[1] < 2:
-                raise ValueError(f"{path}: zu wenige Spalten für premiumIndexKlines")
-            names = expected[:df.shape[1]]
-            df.columns = names
-            # für uns wichtig: open_time → timestamp
-            df = df.rename(columns={"open_time": "timestamp"})
+            # headerlose Variante: first cols: open_time,open,high,low,close,...
+            expected = [
+                "open_time","open","high","low","close","volume",
+                "close_time","quote_volume","count",
+                "taker_buy_volume","taker_buy_quote_volume","ignore"
+            ]
+            df.columns = expected[:df.shape[1]]
+
+        # Timestamp candidates: "open_time","opentime"
+        for k in ("opentime", "opentime", "open_time"):
+            if k in norm_map:
+                ts_col = norm_map[k]; break
         else:
-            # Headerful-Fall
-            if {"open_time","close"}.issubset(cols):
-                df = df.rename(columns={
-                    df.columns[cols.index("open_time")]: "timestamp",
-                    df.columns[cols.index("close")]   : "close"
-                })
-            elif {"opentime","close"}.issubset(cols):
-                df = df.rename(columns={
-                    df.columns[cols.index("opentime")]: "timestamp",
-                    df.columns[cols.index("close")]   : "close"
-                })
-            else:
-                raise ValueError(f"{path}: Unbekannter Premium-Header {df.columns.tolist()}")
-            df = df[["timestamp","close"]]
+            raise ValueError(f"{path}: Konnte kein open_time/opentime finden ({list(norm_map)})")
 
-        required = {"timestamp", "close"}
+        # Close-Wert:
+        if "close" in norm_map:
+            cl_col = norm_map["close"]
+        else:
+            raise ValueError(f"{path}: Konnte kein close-Feld finden ({list(norm_map)})")
 
-    # 3) Timestamp → datetime UTC
+        df = df.rename(columns={ts_col: "timestamp", cl_col: "close"})
+        df = df[["timestamp", "close"]]
+
+    # 4) Timestamp → datetime UTC
     df["timestamp"] = pd.to_datetime(
         df["timestamp"], unit="ms", utc=True, errors="coerce"
     )
     df = df.set_index("timestamp").sort_index()
-
-    # 4) Validierung
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"{path}: Fehlende Spalten {missing}")
 
     return df
 
