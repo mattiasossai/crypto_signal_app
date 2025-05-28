@@ -79,91 +79,96 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
 # ── Flexible CSV-Leser für FundingRate & PremiumIndexKlines ──
 def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
     """
-    Liest FundingRate- oder PremiumIndexKlines-CSV ein,
-    erkennt Header-lose Dateien und normalisiert die Spalten.
-    Gibt DataFrame mit UTC-Index "timestamp" zurück und:
-      - kind="fundingRate": Spalte "fundingRate"
-      - kind="premiumIndexKlines": Spalte "close"
+    Liest eine FundingRate- oder PremiumIndexKlines-CSV ein und normalisiert:
+      - Index: UTC-Datetime aus 'timestamp'
+      - kind='fundingRate'       → Spalte 'fundingRate' (float)
+      - kind='premiumIndexKlines'→ Spalte 'close' (float)
+    Unterstützt:
+      • headerless CSVs (nur numerische Werte in der ersten Zeile)
+      • verschiedene Header-Varianten (camelCase, snake_case, alte & neue Namen)
     """
-    # 1) Einzige Zeile probeweise ohne Header lesen
-    sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
-    headerless = all(
-        str(x).replace('.', '', 1).lstrip('-').isdigit()
-        for x in sample
-    )
-    # 2) Datei vollständig laden (mit oder ohne Header)
-    if headerless:
-        df = pd.read_csv(path, header=None)
-    else:
-        df = pd.read_csv(path)
 
-    cols = [c.lower() for c in df.columns]
+    # 1) Probezeile lesen, um Headerless zu erkennen
+    sample = pd.read_csv(path, nrows=1, header=None).iloc[0].tolist()
+    headerless = all(str(x).replace('.', '', 1).lstrip('-').isdigit() for x in sample)
+
+    # 2) Datei einlesen – immer header=None, um integer‐Spaltennamen zu vermeiden
+    df = pd.read_csv(path, header=None)
+
+    # 3) Spaltennamen als Strings
+    df.columns = [str(i) for i in range(df.shape[1])]
 
     if kind == "fundingRate":
-        # Header-lose Variante: zwei Spalten timestamp & fundingRate
+        # ── FUNDING RATE ─────────────────────────────────────────────
         if headerless:
+            # nur Timestamp + Rate
+            if df.shape[1] < 2:
+                raise ValueError(f"{path}: zu wenige Spalten für fundingRate")
+            df = df.iloc[:, :2]
             df.columns = ["timestamp", "fundingRate"]
-        # neuer Standard: calc_time & last_funding_rate
-        elif {"calc_time", "last_funding_rate"}.issubset(cols):
-            df = df.rename(columns={
-                df.columns[cols.index("calc_time")]: "timestamp",
-                df.columns[cols.index("last_funding_rate")]: "fundingRate"
-            })
-        # ältere Varianten: timestamp/fundingtime + funding_rate/fundingRate
         else:
-            colmap = {c.lower(): c for c in df.columns}
-            # timestamp
-            for alt in ("timestamp", "fundingtime", "funding_time"):
-                if alt in colmap:
-                    df = df.rename(columns={colmap[alt]: "timestamp"})
-                    break
-            # fundingRate
-            for alt in ("funding_rate", "fundingrate", "last_funding_rate"):
-                if alt in colmap:
-                    df = df.rename(columns={colmap[alt]: "fundingRate"})
-                    break
-
-        required = {"timestamp", "fundingRate"}
+            # versuche Headerful-Variante: lade mit header=0, dann mappen
+            df = pd.read_csv(path)
+            cols = [c.lower() for c in df.columns]
+            # neuer Standard
+            if "calc_time" in cols and "last_funding_rate" in cols:
+                df = df.rename(columns={
+                    df.columns[cols.index("calc_time")]: "timestamp",
+                    df.columns[cols.index("last_funding_rate")]: "fundingRate"
+                })
+            else:
+                # suche Timestamp-Spalte
+                for alt in ("calc_time","timestamp","fundingtime","funding_time"):
+                    if alt in cols:
+                        df = df.rename(columns={df.columns[cols.index(alt)]: "timestamp"})
+                        break
+                # suche Rate-Spalte
+                cols = [c.lower() for c in df.columns]
+                for alt in ("last_funding_rate","funding_rate","fundingrate"):
+                    if alt in cols:
+                        df = df.rename(columns={df.columns[cols.index(alt)]: "fundingRate"})
+                        break
+            if {"timestamp","fundingRate"} - set(df.columns):
+                missing = {"timestamp","fundingRate"} - set(df.columns)
+                raise ValueError(f"{path}: fehlende Spalten {missing}")
+            df = df[["timestamp","fundingRate"]]
 
     else:  # premiumIndexKlines
-        # erwartete Spalten, falls headerless
+        # ── PREMIUM INDEX KLINES ────────────────────────────────────
         expected = [
             "open_time","open","high","low","close","volume",
             "close_time","quote_volume","count",
             "taker_buy_volume","taker_buy_quote_volume","ignore"
         ]
         if headerless:
-            df.columns = expected
-        # normaler Header: open_time & close
-        elif {"open_time", "close"}.issubset(cols):
-            df = df.rename(columns={
-                df.columns[cols.index("open_time")]: "timestamp",
-                df.columns[cols.index("close")]: "close"
-            })
-        # CamelCase-Fallback: opentime & close
-        elif {"opentime", "close"}.issubset(cols):
-            df = df.rename(columns={
-                df.columns[cols.index("opentime")]: "timestamp",
-                df.columns[cols.index("close")]: "close"
-            })
+            # assign expected names, truncate falls weniger Spalten
+            names = expected[:df.shape[1]]
+            if df.shape[1] < 2:
+                raise ValueError(f"{path}: zu wenige Spalten für premiumIndexKlines")
+            df.columns = names
+            df = df.rename(columns={"open_time": "timestamp", "close": "close"})
         else:
-            raise ValueError(f"{path}: Unbekannter Premium-Header {list(df.columns)}")
+            # headerful: lese nochmal mit header=0
+            df = pd.read_csv(path)
+            cols = [c.lower() for c in df.columns]
+            if "open_time" in cols and "close" in cols:
+                df = df.rename(columns={
+                    df.columns[cols.index("open_time")]: "timestamp",
+                    df.columns[cols.index("close")]: "close"
+                })
+            elif "opentime" in cols and "close" in cols:
+                df = df.rename(columns={
+                    df.columns[cols.index("opentime")]: "timestamp",
+                    df.columns[cols.index("close")]: "close"
+                })
+            else:
+                raise ValueError(f"{path}: Unbekannter Premium-Header {df.columns.tolist()}")
+            df = df[["timestamp","close"]]
 
-        required = {"timestamp", "close"}
-
-    # Validierung
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"{path}: Fehlende Spalten {missing}")
-
-    # Timestamp → datetime UTC
-    df["timestamp"] = pd.to_datetime(
-        df["timestamp"],
-        unit="ms",
-        utc=True,
-        errors="coerce"
-    )
+    # 4) Konvertiere Timestamp → UTC
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
     df = df.set_index("timestamp").sort_index()
+
     return df
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
@@ -210,8 +215,8 @@ def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
     out["flip"] = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
     out["has_sma"] = out["sma7d"].notna().astype(int)
     out["has_zscore"] = out["zscore"].notna().astype(int)
-    out["sma7d"].fillna(0, inplace=True)
-    out["zscore"].fillna(0, inplace=True)
+    out["sma7d"]  = out["sma7d"].fillna(0)
+    out["zscore"] = out["zscore"].fillna(0)
     out["flip_cumsum"] = out["flip"].cumsum()
     out["hours_since_flip"] = out.groupby("flip_cumsum").cumcount()
     out.drop(columns="flip_cumsum", inplace=True)
