@@ -268,26 +268,23 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     df_all = pd.concat([df_old, df_new]).sort_index()
     df_upd = add_rolling_micro(df_all)
 
-    # Schreibe temporär mit generischem Namen
+    # 1. Schreibe temporär
     tmp_out_file = os.path.join(out_dir, f"{symbol}-features-temp.parquet")
     df_upd.to_parquet(tmp_out_file, compression="snappy")
 
-    # Ermittle tatsächlichen Datenzeitraum aus Index
+    # 2. Ermittle echten Namen & benenne um
     real_sd = df_upd.index.min().date()
     real_ed = df_upd.index.max().date()
-
-    # Generiere finalen Dateinamen mit echten Daten
     final_out_file = os.path.join(
         out_dir,
         f"{symbol}-features-{real_sd}_to_{real_ed}.parquet"
     )
-
-    # 🗑️ Jetzt ALLE alten Parquets entfernen (inkl. alter finaler Files)
-    for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
-        os.remove(old)
-
-    # Benenne temporäre Datei um
     os.rename(tmp_out_file, final_out_file)
+
+    # 3. Jetzt ALLE anderen alten Parquets entfernen
+    for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
+        if old != final_out_file:
+            os.remove(old)
 
     print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
 
