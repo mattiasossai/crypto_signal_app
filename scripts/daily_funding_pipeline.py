@@ -83,21 +83,36 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
         logger.warning(f"   ⚠️ Download von {zip_name} fehlgeschlagen")
         return False
 
-def load_and_concat_funding(symbol: str) -> pd.DataFrame:
-    files = list_monthly_files(symbol, "fundingRate")
-    dfs = []
+def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
+    files = list_monthly_files(symbol, "premiumIndexKlines")
+    frames = []
     for fn in files:
-        logger.info(f"Lade Funding-CSV {fn}")
-        opener = gzip.open if fn.endswith(".gz") else open
-        df = pd.read_csv(opener(fn, "rt"))
-        df.columns = [c.lower() for c in df.columns]
-        check_columns(df, ["calc_time", "funding_interval_hours", "last_funding_rate"], fn)
-        df["fundingtime"] = pd.to_datetime(df["calc_time"], unit="ms", utc=True, errors="coerce")
-        df["fundingrate"] = df["last_funding_rate"]
-        dfs.append(df.set_index("fundingtime")[["fundingrate"]])
-    if not dfs:
-        raise ValueError("Keine Funding-Dateien gefunden.")
-    return pd.concat(dfs).sort_index().drop_duplicates()
+        logger.info(f"Lade Premium-Index-CSV {fn}")
+        df = pd.read_csv(fn)
+        # Mapping auf erwartete Namen
+        colmap = {c.lower(): c for c in df.columns}
+        # Versuche verschiedene mögliche Namen für open_time und close
+        if "open_time" not in colmap:
+            # z.B. OpenTime, opentime, ... (je nach CSV-Version)
+            for alt in ["opentime", "OpenTime"]:
+                if alt in colmap:
+                    df.rename(columns={alt: "open_time"}, inplace=True)
+        if "close" not in colmap:
+            # z.B. Close, closeprice etc.
+            for alt in ["Close", "closeprice"]:
+                if alt in colmap:
+                    df.rename(columns={alt: "close"}, inplace=True)
+        # Nach dem Mapping: Check, ob beide Spalten da sind
+        if "open_time" not in df.columns or "close" not in df.columns:
+            logger.error(f"{fn}: Fehlende Spalten – erwartet ['open_time', 'close']")
+            continue
+        # Konvertierung und Index setzen
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True, errors="coerce")
+        frames.append(df.set_index("open_time")["close"])
+    if not frames:
+        raise ValueError("Keine Premium-Index-Dateien gefunden.")
+    all_prem = pd.concat(frames).sort_index().drop_duplicates()
+    return all_prem.reindex(idx, method="ffill")
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_monthly_files(symbol, "premiumIndexKlines")
