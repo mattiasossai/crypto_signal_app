@@ -102,38 +102,43 @@ def read_csv_flexible(path: str, kind: str) -> pd.DataFrame:
     cols = [str(c).lower() for c in df.columns]
 
     if kind == "fundingRate":
-        # ── FUNDING RATE ─────────────────────────────────────────────
-        expected = ["calc_time", "funding_interval_hours", "last_funding_rate"]
-        if headerless:
-            # assign expected names, truncate falls weniger Spalten
+    # ── FUNDING RATE ─────────────────────────────────────────────
+    expected = ["calc_time", "funding_interval_hours", "last_funding_rate"]
+
+    if headerless:
+        # 1) Minimal-Variante mit exakt 2 Spalten: timestamp & fundingRate
+        if df.shape[1] == 2:
+            df.columns = ["timestamp", "fundingRate"]
+        else:
+            # 2) Drei-Spalten-Variante: calc_time, funding_interval_hours, last_funding_rate
             names = expected[:df.shape[1]]
             df.columns = names
-            # Umbenennen: calc_time→timestamp, last_funding_rate→fundingRate
             df = df.rename(columns={
                 "calc_time": "timestamp",
                 "last_funding_rate": "fundingRate"
             })
+    else:
+        # Headerful-Varianten
+        if {"calc_time", "last_funding_rate"}.issubset(cols):
+            df = df.rename(columns={
+                df.columns[cols.index("calc_time")]: "timestamp",
+                df.columns[cols.index("last_funding_rate")]: "fundingRate"
+            })
         else:
-            # Headerful-Varianten
-            if {"calc_time", "last_funding_rate"}.issubset(cols):
-                df = df.rename(columns={
-                    df.columns[cols.index("calc_time")]: "timestamp",
-                    df.columns[cols.index("last_funding_rate")]: "fundingRate"
-                })
-            else:
-                # Fallback auf ältere Feldnamen
-                colmap = {c.lower(): c for c in df.columns}
-                for alt in ("timestamp", "fundingtime", "funding_time"):
-                    if alt in colmap:
-                        df = df.rename(columns={colmap[alt]: "timestamp"})
-                        break
-                for alt in ("funding_rate", "fundingrate", "last_funding_rate"):
-                    if alt in colmap:
-                        df = df.rename(columns={colmap[alt]: "fundingRate"})
-                        break
-        # wir brauchen nur diese beiden Spalten
-        df = df[["timestamp", "fundingRate"]]
-        required = {"timestamp", "fundingRate"}
+            # Fallback auf ältere Feldnamen
+            colmap = {c.lower(): c for c in df.columns}
+            for alt in ("timestamp", "fundingtime", "funding_time"):
+                if alt in colmap:
+                    df = df.rename(columns={colmap[alt]: "timestamp"})
+                    break
+            for alt in ("funding_rate", "fundingrate", "last_funding_rate"):
+                if alt in colmap:
+                    df = df.rename(columns={colmap[alt]: "fundingRate"})
+                    break
+
+    # Ziehe jetzt nur die beiden Spalten raus
+    df = df.loc[:, ["timestamp", "fundingRate"]]
+    required = {"timestamp", "fundingRate"}
 
     else:
         # ── PREMIUM INDEX KLINES ────────────────────────────────────
