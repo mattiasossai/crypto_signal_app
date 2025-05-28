@@ -81,26 +81,46 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
         return False
 
 def load_and_concat_funding(symbol: str) -> pd.DataFrame:
-    """Lädt alle vorhandenen Funding-CSV-Dateien für ein Symbol und gibt einen DataFrame zurück."""
     files = list_monthly_files(symbol, "fundingRate")
     frames = []
     for fn in files:
         logger.info(f"Lade Funding-CSV {fn}")
         df = pd.read_csv(fn)
-        if "fundingTime" in df.columns:
-            df.rename(columns={"fundingTime": "timestamp"}, inplace=True)
-        if "fundingRate" not in df.columns:
-            # Versuche verschiedene mögliche Spaltennamen (Fallback)
-            for alt in ["fundingrate", "FundingRate"]:
-                if alt in df.columns:
-                    df.rename(columns={alt: "fundingRate"}, inplace=True)
-        check_columns(df, ["timestamp", "fundingRate"], fn)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
-        frames.append(df.set_index("timestamp")[["fundingRate"]])
+
+        # ----------- HEADER ROBUSTHEIT WIE BEI BOOKDEPTH -----------
+        cols = [c.lower() for c in df.columns]
+        if len(df.columns) == 2 and str(df.columns[0]).isdigit():
+            df.columns = ["timestamp", "fundingRate"]
+        else:
+            # Mögliche Namensvarianten abdecken
+            colmap = {c.lower(): c for c in df.columns}
+            # timestamp/ fundingTime Varianten
+            if "timestamp" not in colmap:
+                for alt in ["fundingtime", "funding_time", "time"]:
+                    if alt in colmap:
+                        df.rename(columns={colmap[alt]: "timestamp"}, inplace=True)
+            if "fundingrate" not in colmap:
+                for alt in ["funding_rate", "fundingrate"]:
+                    if alt in colmap:
+                        df.rename(columns={colmap[alt]: "fundingRate"}, inplace=True)
+            # Falls Header immer noch fehlt, breche ab mit Log
+            if not {"timestamp", "fundingRate"}.issubset(df.columns):
+                logger.error(f"{fn}: Fehlende Spalten nach Umbenennung! Header = {list(df.columns)}")
+                continue
+
+        # ----------- ZEITKONVERTIERUNG -----------
+        if pd.api.types.is_numeric_dtype(df["timestamp"]):
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True, errors="coerce")
+        else:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        df.set_index("timestamp", inplace=True)
+        df.sort_index(inplace=True)
+
+        frames.append(df[["fundingRate"]])
     if not frames:
-        raise ValueError("Keine Funding-Rate-Dateien gefunden.")
-    all_fund = pd.concat(frames).sort_index().drop_duplicates()
-    return all_fund
+        raise ValueError("Keine Funding-CSV-Dateien gefunden oder alle haben falsche Header.")
+    all_funding = pd.concat(frames).sort_index().drop_duplicates()
+    return all_funding
 
 def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     files = list_monthly_files(symbol, "premiumIndexKlines")
