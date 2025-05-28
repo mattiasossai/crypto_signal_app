@@ -67,10 +67,9 @@ def download_and_unzip_month(symbol: str, kind: str, month: str) -> bool:
 
     os.makedirs(out_dir, exist_ok=True)
     logger.info(f"→ Prüfe {zip_name}")
-
-    # HEAD request, prüft ob Datei existiert
-    res = subprocess.run(["curl", "-sI", url], capture_output=True)
-    if b"200 OK" not in res.stdout:
+    # Echte Existenzprüfung via Download-Versuch ins Nirwana
+    res = subprocess.run(["curl", "-f", "-s", url, "-o", os.devnull])
+    if res.returncode != 0:
         logger.info(f"   ❌ {zip_name} nicht gefunden")
         return False
     logger.info(f"   ✔️ vorhanden, lade…")
@@ -144,7 +143,7 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
     pattern = os.path.join(parquet_dir, f"{symbol}-funding-features-*.parquet")
     files = sorted(glob.glob(pattern))
 
-    # ---- Full-History-Modus: Alle Monate von-bis ----
+    # --- Full-History-Modus: Lade gezielt gewünschten Bereich ---
     if start_date and end_date:
         start_month = pd.Period(start_date, "M")
         end_month = pd.Period(end_date, "M")
@@ -183,7 +182,7 @@ def process_symbol(symbol: str, start_date: str = None, end_date: str = None):
                 logger.info(f"🗑️ Altes Parquet entfernt: {old}")
         return
 
-    # ---- Inkrementell: Nur nächsten Monat prüfen ----
+    # --- Inkrementeller Modus: Prüfe, ob neuer Monat vorhanden ist ---
     if files:
         latest_file = max(files, key=os.path.getmtime)
         existing = pd.read_parquet(latest_file)
