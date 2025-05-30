@@ -68,10 +68,9 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     Liefert DataFrame (Index=timestamp) und has_data-Flag.
     """
     EXPECTED = ["timestamp", "percentage", "depth", "notional"]
-    path = pd.Path(csv_fp) if hasattr(pd, 'Path') else None
 
     if not os.path.exists(csv_fp):
-        logger.warning(f"{csv_fp}: Datei fehlt, übersprungen")
+        logger.warning(f"{os.path.basename(csv_fp)}: Datei fehlt, übersprungen")
         empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
         return empty, False
 
@@ -79,14 +78,13 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     try:
         df = pd.read_csv(csv_fp, header=0)
     except Exception as e:
-        logger.error(f"{csv_fp}: Fehler beim Einlesen headerful: {e}")
+        logger.error(f"{os.path.basename(csv_fp)}: Fehler beim Einlesen headerful: {e}")
         empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
         return empty, False
 
     lower = [c.lower() for c in df.columns]
     if set(EXPECTED).issubset(lower):
         logger.info(f"{os.path.basename(csv_fp)}: Headerful erkannt → {df.columns.tolist()}")
-        # remap auf konsistente Namen
         rename_map = {
             df.columns[lower.index("timestamp")]: "timestamp",
             df.columns[lower.index("percentage")]: "percentage",
@@ -139,7 +137,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         m1  = sl["percentage"].abs() <= 1.0
         m10 = sl["percentage"].abs() <= 10.0
         n1, d1   = sl.loc[m1, "notional"].sum(), sl.loc[m1, "depth"].sum()
-        n10, d10 = sl.loc[m10, "notional"].sum(), sl.loc[m10, "depth"].sum()
+        n10, d10 = sl.loc[m10,"notional"].sum(), sl.loc[m10,"depth"].sum()
         rel_n1 = n1/tot_not if tot_not else np.nan
         rel_d1 = d1/tot_dep if tot_dep else np.nan
         p_min = sl.loc[sl["percentage"]>0, "percentage"].min() or 0
@@ -154,14 +152,14 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 
         n, d = sl["notional"], sl["depth"]
         moments = {
-            "not_mean":     n.mean(),
-            "not_var":      n.var(ddof=0),
-            "not_skew":     skew(n, bias=False)  if len(n)>1 else np.nan,
-            "not_kurt":     kurtosis(n, bias=False) if len(n)>1 else np.nan,
-            "dep_mean":     d.mean(),
-            "dep_var":      d.var(ddof=0),
-            "dep_skew":     skew(d, bias=False)  if len(d)>1 else np.nan,
-            "dep_kurt":     kurtosis(d, bias=False) if len(d)>1 else np.nan,
+            "not_mean": n.mean(),
+            "not_var":  n.var(ddof=0),
+            "not_skew": skew(n, bias=False) if len(n)>1 else np.nan,
+            "not_kurt": kurtosis(n, bias=False) if len(n)>1 else np.nan,
+            "dep_mean": d.mean(),
+            "dep_var":  d.var(ddof=0),
+            "dep_skew": skew(d, bias=False) if len(d)>1 else np.nan,
+            "dep_kurt": kurtosis(d, bias=False) if len(d)>1 else np.nan,
         }
 
         seg1 = sl.between_time("00:00","07:59")[["notional","depth"]].sum(min_count=1)
@@ -204,56 +202,62 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     """
     Berechnung rollierender Fenster und Microstructure Features.
-    Ohne fillna(0) – stattdessen has_* Flags.
+    Ohne fillna(0) – stattdessen has_* Flags und ML-freundliches Lückenhandling.
     """
-    for w in (7, 14, 21):
-        for base in ("notional_imbalance", "depth_imbalance"):
+    # Rollende Imbalance-Fenster
+    for w in (7,14,21):
+        for base in ("notional_imbalance","depth_imbalance"):
             col = f"{base}_roll_{w}d"
             roll = df[base].rolling(window=w, min_periods=w).mean()
             df[col]          = roll
             df[f"has_{col}"] = roll.notna().astype(int)
 
-    # VPIN
+    # VPIN (mindestens 1 Wert)
     df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
 
-    # Amihud (min_periods = window)
-    ai      = df.ret / df.total_notional.replace(0, np.nan)
-    roll_ai = ai.rolling(window=30, min_periods=30).mean()
-    df["amihud_roll_30d"]     = roll_ai
-    df["has_amihud_roll_30d"] = roll_ai.notna().astype(int)
-    
+    # MidPrice + Return (ret) für Kyle λ und Amihud
+    df["mid_price"] = (df.total_notional / df.total_depth).replace([np.inf, -np.inf], np.nan)
+    df["ret"]       = df.mid_price.pct_change().abs()
+
+    # Kyle Lambda
+    w = 30
     kl = []
     for i in range(len(df)):
         if i < w:
-            kl.append(0)
+            kl.append(np.nan)
         else:
             sub = df.iloc[i-w+1:i+1]
             X = sub.total_notional.diff().values.reshape(-1,1)
             y = sub.mid_price.diff().abs().values
             m = (~np.isnan(X.flatten())) & (~np.isnan(y))
-            kl.append(LinearRegression().fit(X[m],y[m]).coef_[0] if m.sum()>=2 else 0)
+            coef = LinearRegression().fit(X[m], y[m]).coef_[0] if m.sum()>=2 else np.nan
+            kl.append(coef)
     df[f"kyle_lambda_roll_{w}d"]     = kl
-    df[f"has_kyle_lambda_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
+    df[f"has_kyle_lambda_roll_{w}d"] = pd.Series(kl).notna().astype(int).values
 
-    ai      = df.ret / df.total_notional.replace(0,np.nan)
-    roll_ai = ai.rolling(window=w, min_periods=w).mean().fillna(0)
-    df[f"amihud_roll_{w}d"]    = roll_ai
-    df[f"has_amihud_roll_{w}d"] = roll_ai.notna()
+    # Amihud (ohne Fillna)
+    ai      = df.ret / df.total_notional.replace(0, np.nan)
+    roll_ai = ai.rolling(window=w, min_periods=w).mean()
+    df[f"amihud_roll_{w}d"]     = roll_ai
+    df[f"has_amihud_roll_{w}d"] = roll_ai.notna().astype(int)
 
+    # Liquidity Slope (unverändert)
     ls = []
     for i in range(len(df)):
         if i < w:
-            ls.append(0)
+            ls.append(np.nan)
         else:
             sub = df.iloc[i-w+1:i+1]
             X = sub.rel_depth_1pct.values.reshape(-1,1)
             y = sub.spread_pct.values
             m = (~np.isnan(X.flatten())) & (~np.isnan(y))
-            ls.append(LinearRegression().fit(X[m],y[m]).coef_[0] if m.sum()>=2 else 0)
+            coef = LinearRegression().fit(X[m], y[m]).coef_[0] if m.sum()>=2 else np.nan
+            ls.append(coef)
     df[f"liq_slope_roll_{w}d"]     = ls
-    df[f"has_liq_slope_roll_{w}d"] = [i>=w-1 for i in range(len(df))]
+    df[f"has_liq_slope_roll_{w}d"] = pd.Series(ls).notna().astype(int).values
 
-    return df.drop(columns=["mid_price","ret"], errors="ignore")
+    # MidPrice und ret können für ML als Features genutzt werden oder hier entfernt werden:
+    return df.drop(columns=["mid_price"], errors="ignore")
 
 def process_symbol(symbol: str, start_date: str, end_date: str):
     # a) parse dates
