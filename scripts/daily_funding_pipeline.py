@@ -179,22 +179,49 @@ def load_and_concat_premium(symbol: str, idx: pd.DatetimeIndex) -> pd.Series:
     return all_prem.reindex(idx, method="ffill")
 
 def compute_features(fund_df: pd.DataFrame) -> pd.DataFrame:
-    hourly = fund_df["fundingRate"].resample("1h").mean().ffill()
-    out = pd.DataFrame({"fundingRate": hourly})
-    out["fundingRate_8h"] = out["fundingRate"].rolling(ROLL_HOURS).sum()
+    # 1) Vollständigen Stunden-Index anlegen
+    idx = pd.date_range(
+        start=fund_df.index.min(),
+        end=fund_df.index.max(),
+        freq="1h",
+        tz="UTC"
+    )
+    # 2) Reindex ohne ffill → fehlende Stunden = NaN
+    sr = fund_df["fundingRate"].reindex(idx)
+    out = pd.DataFrame({"fundingRate": sr})
+    # Flag, ob echte Daten vorhanden waren
+    out["has_funding"] = out["fundingRate"].notna().astype(int)
+
+    # 3) 8-Stunden-Summe nur mit min_periods=8
+    out["fundingRate_8h"] = (
+        out["fundingRate"]
+           .rolling(window=ROLL_HOURS, min_periods=ROLL_HOURS)
+           .sum()
+    )
+
+    # 4) 7-Tage-SMA nur mit min_periods=7*24
     win = SMA_DAYS * 24
-    out["sma7d"] = out["fundingRate_8h"].rolling(win).mean()
-    out["zscore"] = (out["fundingRate_8h"] - out["sma7d"]) \
-                    / out["fundingRate_8h"].rolling(win).std()
-    out["flip"] = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
+    out["sma7d"] = (
+        out["fundingRate_8h"]
+           .rolling(window=win, min_periods=win)
+           .mean()
+    )
     out["has_sma"] = out["sma7d"].notna().astype(int)
+
+    # 5) Z-Score analog nur mit min_periods
+    std = out["fundingRate_8h"].rolling(window=win, min_periods=win).std()
+    out["zscore"] = (out["fundingRate_8h"] - out["sma7d"]) / std
     out["has_zscore"] = out["zscore"].notna().astype(int)
-    out["sma7d"]  = out["sma7d"].fillna(0)
-    out["zscore"] = out["zscore"].fillna(0)
+
+    # 6) Flip-Feature und Stunden-seit-Flip
+    out["flip"] = np.sign(out["fundingRate_8h"]).diff().abs().fillna(0).astype(int)
     out["flip_cumsum"] = out["flip"].cumsum()
     out["hours_since_flip"] = out.groupby("flip_cumsum").cumcount()
-    out.drop(columns="flip_cumsum", inplace=True)
+    out.drop(columns=["flip_cumsum"], inplace=True)
+
+    # 7) Platzhalter für Basis (wird außerhalb ergänzt)
     out["basis"] = np.nan
+
     return out
 
 def process_symbol(symbol: str, start_date: str=None, end_date: str=None):
