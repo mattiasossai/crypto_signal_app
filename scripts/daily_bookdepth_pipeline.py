@@ -12,6 +12,13 @@ import pandas as pd
 from scipy.stats import skew, kurtosis
 from sklearn.linear_model import LinearRegression
 
+# ——————————————— Logger konfigurieren ———————————————
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+
 # Inception-Daten pro Symbol
 INCEPTION = {
     "BTCUSDT": "2023-01-01",
@@ -22,23 +29,24 @@ INCEPTION = {
     "ENAUSDT": "2024-04-02",
 }
 
-def download_day(symbol: str, day, raw_dir: str):
+def download_day(symbol: str, day, raw_dir: str) -> bool:
     """
     Lade die ZIP-Datei für einen Tag herunter und entpacke sie.
-    Return True bei Erfolg.
+    Return True bei Erfolg, False bei 404 oder Fehler.
     """
     ds = day.strftime("%Y-%m-%d")
     zip_name = f"{symbol}-bookDepth-{ds}.zip"
     zip_path = os.path.join(raw_dir, zip_name)
     url = f"https://data.binance.vision/data/futures/um/daily/bookDepth/{symbol}/{zip_name}"
-    print(f"→ FETCH {symbol} {ds}: {url}")
-    res = subprocess.run(["curl","-sSf",url,"-o",zip_path], capture_output=True)
+    logger.info(f"→ FETCH {symbol} {ds}: {url}")
+    res = subprocess.run(["curl", "-sSf", url, "-o", zip_path], capture_output=True)
     if res.returncode == 0:
-        subprocess.run(["unzip","-q","-o",zip_path,"-d",raw_dir], check=True)
+        subprocess.run(["unzip", "-q", "-o", zip_path, "-d", raw_dir], check=True)
         os.remove(zip_path)
+        logger.info(f"{symbol} {ds}: ZIP erfolgreich geladen und entpackt")
         return True
     else:
-        print(f"   ⚠️  {symbol} {ds}: ZIP nicht gefunden")
+        logger.warning(f"{symbol} {ds}: ZIP nicht gefunden (Status {res.returncode})")
         return False
 
 def download_and_unzip(symbol: str, days, raw_dir: str):
@@ -48,55 +56,72 @@ def download_and_unzip(symbol: str, days, raw_dir: str):
     os.makedirs(raw_dir, exist_ok=True)
     results = []
     for day in days:
-        result = download_day(symbol, day, raw_dir)
-        results.append(result)
+        ok = download_day(symbol, day, raw_dir)
+        results.append(ok)
     return results
 
 def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     """
-    Lese CSV ein, parse Timestamp (epoch-ms oder ISO-String),
-    slice Daten des Tages, gebe DataFrame und has_data (bool) zurück.
+    Robustes Einlesen eines BookDepth-CSV:
+     - Headerful (timestamp,percentage,depth,notional)
+     - fallback headerless
+    Liefert DataFrame (Index=timestamp) und has_data-Flag.
     """
+    EXPECTED = ["timestamp", "percentage", "depth", "notional"]
+    path = pd.Path(csv_fp) if hasattr(pd, 'Path') else None
+
     if not os.path.exists(csv_fp):
         logger.warning(f"{csv_fp}: Datei fehlt, übersprungen")
-        empty = pd.DataFrame([], columns=["percentage","depth","notional"],
-                             index=pd.DatetimeIndex([], tz="UTC"))
+        empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
         return empty, False
-    
+
+    # 1) Versuch Headerful
     try:
-        df_raw = pd.read_csv(csv_fp)
+        df = pd.read_csv(csv_fp, header=0)
     except Exception as e:
-        logger.error(f"{csv_fp}: Fehler beim Einlesen: {e}")
-        empty = pd.DataFrame([], columns=["percentage","depth","notional"],
-                             index=pd.DatetimeIndex([], tz="UTC"))
+        logger.error(f"{csv_fp}: Fehler beim Einlesen headerful: {e}")
+        empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
         return empty, False
-        
-    if str(df_raw.columns[0]).isdigit():
-        df_raw.columns = ["timestamp","percentage","depth","notional"]
-    
-    if pd.api.types.is_numeric_dtype(df_raw["timestamp"]):
-        df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], unit="ms", utc=True, errors="coerce")
+
+    lower = [c.lower() for c in df.columns]
+    if set(EXPECTED).issubset(lower):
+        logger.info(f"{os.path.basename(csv_fp)}: Headerful erkannt → {df.columns.tolist()}")
+        # remap auf konsistente Namen
+        rename_map = {
+            df.columns[lower.index("timestamp")]: "timestamp",
+            df.columns[lower.index("percentage")]: "percentage",
+            df.columns[lower.index("depth")]:     "depth",
+            df.columns[lower.index("notional")]: "notional",
+        }
+        df = df.rename(columns=rename_map)[EXPECTED]
     else:
-        df_raw["timestamp"] = pd.to_datetime(df_raw["timestamp"], utc=True, errors="coerce")
-        
-    # prüfen, ob alle wichtigen Spalten da sind
-    for col in ("percentage","depth","notional"):
-        if col not in df_raw:
-            logger.error(f"{csv_fp}: Spalte '{col}' fehlt nach Umbenennung, übersprungen")
-            empty = pd.DataFrame([], columns=["percentage","depth","notional"],
-                                 index=pd.DatetimeIndex([], tz="UTC"))
+        logger.warning(f"{os.path.basename(csv_fp)}: Header unvollständig, fallback headerless")
+        df = pd.read_csv(csv_fp, header=None)
+        if df.shape[1] < len(EXPECTED):
+            logger.error(f"{os.path.basename(csv_fp)}: headerless erwartet ≥{len(EXPECTED)} Spalten, hat {df.shape[1]}")
+            empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
             return empty, False
-            
-    df_raw.set_index("timestamp", inplace=True)
-    df_raw.sort_index(inplace=True)
-    
+        df = df.iloc[:, :len(EXPECTED)]
+        df.columns = EXPECTED
+
+    # Timestamp konvertieren
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        unit="ms" if pd.api.types.is_numeric_dtype(df["timestamp"]) else None,
+        utc=True,
+        errors="coerce"
+    )
+    n_bad = df["timestamp"].isna().sum()
+    if n_bad:
+        logger.warning(f"{os.path.basename(csv_fp)}: {n_bad} ungültige timestamps (NaT)")
+
+    df = df.set_index("timestamp").sort_index()
+
+    # Tages-Slice
     next_day = day + pd.Timedelta(days=1)
-    sl = df_raw.loc[(df_raw.index >= day) & (df_raw.index < next_day)]
-    
-    print(f"   • {csv_fp}: read {len(df_raw)} rows → sliced {len(sl)}")
-    has_data = not sl.empty
-    
-    return sl, has_data
+    sl = df.loc[(df.index >= day) & (df.index < next_day)]
+    logger.info(f"{os.path.basename(csv_fp)}: gelesen {len(df)} Zeilen, gesliced {len(sl)}")
+    return sl, not sl.empty
 
 def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp):
     """
@@ -108,34 +133,35 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{day.strftime('%Y-%m-%d')}.csv")
         sl, has_data = parse_csv_to_df(csv_fp, day)
 
+        # — Tages-Features wie bisher —
         tot_not = sl["notional"].sum()
         tot_dep = sl["depth"].sum()
-        m1 = sl["percentage"].abs() <= 1.0
-        m10= sl["percentage"].abs() <= 10.0
-        n1, d1   = sl.loc[m1,"notional"].sum(), sl.loc[m1,"depth"].sum()
-        n10,d10  = sl.loc[m10,"notional"].sum(), sl.loc[m10,"depth"].sum()
+        m1  = sl["percentage"].abs() <= 1.0
+        m10 = sl["percentage"].abs() <= 10.0
+        n1, d1   = sl.loc[m1, "notional"].sum(), sl.loc[m1, "depth"].sum()
+        n10, d10 = sl.loc[m10, "notional"].sum(), sl.loc[m10, "depth"].sum()
         rel_n1 = n1/tot_not if tot_not else np.nan
         rel_d1 = d1/tot_dep if tot_dep else np.nan
-        p_min = sl.loc[sl["percentage"]>0,"percentage"].min() or 0
-        n_max = sl.loc[sl["percentage"]<0,"percentage"].max() or 0
+        p_min = sl.loc[sl["percentage"]>0, "percentage"].min() or 0
+        n_max = sl.loc[sl["percentage"]<0, "percentage"].max() or 0
         spread_pct = p_min + abs(n_max)
-        bid_n = sl.loc[sl["percentage"]<0,"notional"].sum()
-        ask_n = sl.loc[sl["percentage"]>0,"notional"].sum()
+        bid_n = sl.loc[sl["percentage"]<0, "notional"].sum()
+        ask_n = sl.loc[sl["percentage"]>0, "notional"].sum()
         imb_n = (bid_n-ask_n)/tot_not if tot_not else np.nan
-        bid_d = sl.loc[sl["percentage"]<0,"depth"].sum()
-        ask_d = sl.loc[sl["percentage"]>0,"depth"].sum()
+        bid_d = sl.loc[sl["percentage"]<0, "depth"].sum()
+        ask_d = sl.loc[sl["percentage"]>0, "depth"].sum()
         imb_d = (bid_d-ask_d)/tot_dep if tot_dep else np.nan
 
         n, d = sl["notional"], sl["depth"]
         moments = {
-            "not_mean": n.mean(),
-            "not_var":  n.var(ddof=0),
-            "not_skew": skew(n, bias=False) if len(n)>1 else np.nan,
-            "not_kurt": kurtosis(n, bias=False) if len(n)>1 else np.nan,
-            "dep_mean": d.mean(),
-            "dep_var":  d.var(ddof=0),
-            "dep_skew": skew(d, bias=False) if len(d)>1 else np.nan,
-            "dep_kurt": kurtosis(d, bias=False) if len(d)>1 else np.nan,
+            "not_mean":     n.mean(),
+            "not_var":      n.var(ddof=0),
+            "not_skew":     skew(n, bias=False)  if len(n)>1 else np.nan,
+            "not_kurt":     kurtosis(n, bias=False) if len(n)>1 else np.nan,
+            "dep_mean":     d.mean(),
+            "dep_var":      d.var(ddof=0),
+            "dep_skew":     skew(d, bias=False)  if len(d)>1 else np.nan,
+            "dep_kurt":     kurtosis(d, bias=False) if len(d)>1 else np.nan,
         }
 
         seg1 = sl.between_time("00:00","07:59")[["notional","depth"]].sum(min_count=1)
@@ -178,20 +204,24 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     """
     Berechnung rollierender Fenster und Microstructure Features.
+    Ohne fillna(0) – stattdessen has_* Flags.
     """
-    for w in (7,14,21):
-        for base in ("notional_imbalance","depth_imbalance"):
+    for w in (7, 14, 21):
+        for base in ("notional_imbalance", "depth_imbalance"):
             col = f"{base}_roll_{w}d"
             roll = df[base].rolling(window=w, min_periods=w).mean()
-            df[col]          = roll.fillna(0)
-            df[f"has_{col}"] = roll.notna()
+            df[col]          = roll
+            df[f"has_{col}"] = roll.notna().astype(int)
 
+    # VPIN
     df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
 
-    w = 30
-    df["mid_price"] = (df.total_notional/df.total_depth).replace([np.inf,-np.inf],np.nan)
-    df["ret"] = df.mid_price.pct_change(fill_method=None).abs().fillna(0)
-
+    # Amihud (min_periods = window)
+    ai      = df.ret / df.total_notional.replace(0, np.nan)
+    roll_ai = ai.rolling(window=30, min_periods=30).mean()
+    df["amihud_roll_30d"]     = roll_ai
+    df["has_amihud_roll_30d"] = roll_ai.notna().astype(int)
+    
     kl = []
     for i in range(len(df)):
         if i < w:
