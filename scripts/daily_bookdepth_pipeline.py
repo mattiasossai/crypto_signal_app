@@ -217,7 +217,7 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
 
     # MidPrice + Return (ret) für Kyle λ und Amihud
     df["mid_price"] = (df.total_notional / df.total_depth).replace([np.inf, -np.inf], np.nan)
-    df["ret"]       = df.mid_price.pct_change().abs()
+    df["ret"]       = df.mid_price.pct_change(fill_method=None).abs()
 
     # Kyle Lambda
     w = 30
