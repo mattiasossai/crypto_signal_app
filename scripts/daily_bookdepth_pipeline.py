@@ -127,23 +127,35 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
     """
     days = pd.date_range(start.normalize(), end.normalize(), freq="D", tz="UTC")
     rows = []
+
+    # Hilfsfunktion: berechnet in einem DataFrame-Slice den engsten Ask/Bid-Spread (in %)
+    def compute_segment_spread(df_slice):
+        pos = df_slice.loc[df_slice["percentage"] > 0, "percentage"]
+        neg = df_slice.loc[df_slice["percentage"] < 0, "percentage"]
+        if len(pos) >= 1 and len(neg) >= 1:
+            p_ask = pos.min()
+            p_bid = neg.max()
+            return p_ask + abs(p_bid)
+        else:
+            return np.nan
+
     for day in days:
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{day.strftime('%Y-%m-%d')}.csv")
         sl, has_data = parse_csv_to_df(csv_fp, day)
 
-        # ─── Neuer Block beginnt hier (ersetzt den alten Abschnitt bis rows.append) ───
+        # ─── Neuer Block beginnt hier ───
 
         # 1) Totale Notional- und Depth-Summen
         tot_not = sl["notional"].sum()
         tot_dep = sl["depth"].sum()
 
-        # 2) Relativ‐Anteile für ±1 % (wie bisher)
+        # 2) Relativ-Anteile für ±1 %
         m1  = sl["percentage"].abs() <= 1.0
         n1, d1 = sl.loc[m1, "notional"].sum(), sl.loc[m1, "depth"].sum()
         rel_n1 = n1 / tot_not if tot_not else np.nan
         rel_d1 = d1 / tot_dep if tot_dep else np.nan
 
-        # ─── Neu: Relativ‐Anteile für ±2 %, ±3 %, ±4 %, ±5 % ───
+        # 3) Relativ-Anteile für ±2…±5 %
         n2  = sl.loc[sl["percentage"].abs() <= 2.0, "notional"].sum()
         d2  = sl.loc[sl["percentage"].abs() <= 2.0, "depth"].sum()
         rel_n2 = n2 / tot_not if tot_not else np.nan
@@ -164,7 +176,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         rel_n5 = n5 / tot_not if tot_not else np.nan
         rel_d5 = d5 / tot_dep if tot_dep else np.nan
 
-        # 3) Engste Ask/Bid für spread_pct (wie bisher)
+        # 4) Engster Ask/Bid für daily spread_pct (in %)
         pos = sl.loc[sl["percentage"] > 0, "percentage"].sort_values()
         neg = sl.loc[sl["percentage"] < 0, "percentage"].sort_values()
         if len(pos) >= 1 and len(neg) >= 1:
@@ -174,18 +186,18 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         else:
             spread_pct = np.nan
 
-        # 4) Absolute USD‐Spread aus Mid‐Approximation (spread_abs) ─ neu
-        if not np.isnan(spread_pct):
-            mid_price = tot_not / tot_dep if tot_dep else np.nan
+        # 5) Absolute USD-Spread (spread_abs)
+        if not np.isnan(spread_pct) and tot_dep:
+            mid_price = tot_not / tot_dep
             ask_px    = mid_price * (1 + p_ask/100)
             bid_px    = mid_price * (1 + p_bid/100)
             spread_abs = ask_px - bid_px
         else:
             spread_abs = np.nan
 
-        # 5) VWAP‐Spread (spread_vwap) über alle Ebenen ±1…±5 % ─ neu
-        if not np.isnan(spread_pct):
-            mid_price = tot_not / tot_dep if tot_dep else np.nan
+        # 6) VWAP-Spread über alle Ebenen ±1…±5 % (spread_vwap)
+        if not np.isnan(spread_pct) and tot_dep:
+            mid_price = tot_not / tot_dep
             sl2 = sl.copy()
             sl2["price"] = mid_price * (1 + sl2["percentage"]/100)
 
@@ -200,7 +212,17 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         else:
             spread_vwap = np.nan
 
-        # 6) Bid/Ask‐Imbalance (wie bisher)
+        # 7) GARCH-like Tages-Volatilität von spread_vwap (Proxy über mid_price-Änderung)
+        if not sl.empty and tot_dep:
+            sl2 = sl.copy()
+            mid_price = tot_not / tot_dep
+            sl2["price"] = mid_price * (1 + sl2["percentage"]/100)
+            hourly_mid = sl2["price"].resample("1H").last().ffill()
+            garch_like_vol = hourly_mid.pct_change().dropna().std(ddof=0)
+        else:
+            garch_like_vol = np.nan
+
+        # 8) Bid/Ask-Imbalance (täglich)
         bid_n = sl.loc[sl["percentage"] < 0, "notional"].sum()
         ask_n = sl.loc[sl["percentage"] > 0, "notional"].sum()
         imb_n = (bid_n - ask_n) / tot_not if tot_not else np.nan
@@ -209,7 +231,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         ask_d = sl.loc[sl["percentage"] > 0, "depth"].sum()
         imb_d = (bid_d - ask_d) / tot_dep if tot_dep else np.nan
 
-        # 7) Momente (unverändert)
+        # 9) Momente (unverändert)
         n, d = sl["notional"], sl["depth"]
         moments = {
             "not_mean":   n.mean(),
@@ -222,12 +244,80 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "dep_kurt":   kurtosis(d, bias=False) if len(d) > 1 else np.nan,
         }
 
-        # 8) Time‐Slice‐Segmente (unverändert)
+        # ─── NEU: Skew/Kurtosis nur auf oberste 10 % Depth-Volumina ───
+        if not sl.empty:
+            depth_90 = sl["depth"].quantile(0.90)
+            top10 = sl.loc[sl["depth"] >= depth_90, "depth"]
+            if len(top10) > 1:
+                skew_top10 = skew(top10, bias=False)
+                kurt_top10 = kurtosis(top10, bias=False)
+            else:
+                skew_top10 = np.nan
+                kurt_top10 = np.nan
+        else:
+            skew_top10 = np.nan
+            kurt_top10 = np.nan
+
+        # ─── NEU: Quantil-Features der stündlichen Depth-Summe ───
+        if not sl.empty:
+            hourly_depth_sum = sl["depth"].resample("1H").sum().dropna()
+            depth_hour_q10 = hourly_depth_sum.quantile(0.10)
+            depth_hour_q90 = hourly_depth_sum.quantile(0.90)
+        else:
+            depth_hour_q10 = np.nan
+            depth_hour_q90 = np.nan
+
+        # 10) Time-Slice-Segmente (unverändert)
         seg1 = sl.between_time("00:00","07:59")[["notional","depth"]].sum(min_count=1)
         seg2 = sl.between_time("08:00","15:59")[["notional","depth"]].sum(min_count=1)
         seg3 = sl.between_time("16:00","23:59")[["notional","depth"]].sum(min_count=1)
 
-        # 9) rows.append mit allen neuen und bisherigen Feldern
+        # ─── NEU: Intraday-Volatilität (Varianz & Max) pro Stunde ───
+        if not sl.empty:
+            hourly_not = sl["notional"].resample("1H").sum()
+            intraday_notional_var = hourly_not.var(ddof=0)
+            max_hourly_notional   = hourly_not.max()
+
+            hourly_dep = sl["depth"].resample("1H").sum()
+            intraday_depth_var = hourly_dep.var(ddof=0)
+            max_hourly_depth   = hourly_dep.max()
+        else:
+            intraday_notional_var = np.nan
+            max_hourly_notional   = np.nan
+            intraday_depth_var    = np.nan
+            max_hourly_depth      = np.nan
+
+        # ─── NEU: Time-of-Day-Spreads (in %) ───
+        spread_00_08 = compute_segment_spread(sl.between_time("00:00","07:59"))
+        spread_08_16 = compute_segment_spread(sl.between_time("08:00","15:59"))
+        spread_16_24 = compute_segment_spread(sl.between_time("16:00","23:59"))
+
+        # ─── NEU: Time-of-Day-Imbalances ───
+        sl_00_08 = sl.between_time("00:00","07:59")
+        if not sl_00_08.empty:
+            bid_00_08 = sl_00_08.loc[sl_00_08["percentage"] < 0, "notional"].sum()
+            ask_00_08 = sl_00_08.loc[sl_00_08["percentage"] > 0, "notional"].sum()
+            imb_00_08 = (bid_00_08 - ask_00_08) / sl_00_08["notional"].sum()
+        else:
+            imb_00_08 = np.nan
+
+        sl_08_16 = sl.between_time("08:00","15:59")
+        if not sl_08_16.empty:
+            bid_08_16 = sl_08_16.loc[sl_08_16["percentage"] < 0, "notional"].sum()
+            ask_08_16 = sl_08_16.loc[sl_08_16["percentage"] > 0, "notional"].sum()
+            imb_08_16 = (bid_08_16 - ask_08_16) / sl_08_16["notional"].sum()
+        else:
+            imb_08_16 = np.nan
+
+        sl_16_24 = sl.between_time("16:00","23:59")
+        if not sl_16_24.empty:
+            bid_16_24 = sl_16_24.loc[sl_16_24["percentage"] < 0, "notional"].sum()
+            ask_16_24 = sl_16_24.loc[sl_16_24["percentage"] > 0, "notional"].sum()
+            imb_16_24 = (bid_16_24 - ask_16_24) / sl_16_24["notional"].sum()
+        else:
+            imb_16_24 = np.nan
+
+        # 11) rows.append mit allen Feldern
         rows.append({
             "date":               day,
             "file_exists":        has_data,
@@ -235,45 +325,56 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "has_depth":          tot_dep > 0,
             "total_notional":     tot_not,
             "total_depth":        tot_dep,
-            # Duplication‐Flag (wird weiter unten endgültig gesetzt)
-            "dup_flag":           None,
+            "dup_flag":           None,    # wird weiter unten gesetzt
+            "interpolation_flag": 0,       # wird weiter unten ggf. auf 1 gesetzt
 
-            # → rel_notional_Xpct / rel_depth_Xpct (X=1…5)
+            # Relativ-Anteile (±1…±5 %)
             "notional_1pct":      n1,
             "depth_1pct":         d1,
             "rel_notional_1pct":  rel_n1,
             "rel_depth_1pct":     rel_d1,
 
-            "notional_2pct":      n2,   # neu
-            "depth_2pct":         d2,   # neu
-            "rel_notional_2pct":  rel_n2,# neu
-            "rel_depth_2pct":     rel_d2,# neu
+            "notional_2pct":      n2,
+            "depth_2pct":         d2,
+            "rel_notional_2pct":  rel_n2,
+            "rel_depth_2pct":     rel_d2,
 
-            "notional_3pct":      n3,   # neu
-            "depth_3pct":         d3,   # neu
-            "rel_notional_3pct":  rel_n3,# neu
-            "rel_depth_3pct":     rel_d3,# neu
+            "notional_3pct":      n3,
+            "depth_3pct":         d3,
+            "rel_notional_3pct":  rel_n3,
+            "rel_depth_3pct":     rel_d3,
 
-            "notional_4pct":      n4,   # neu
-            "depth_4pct":         d4,   # neu
-            "rel_notional_4pct":  rel_n4,# neu
-            "rel_depth_4pct":     rel_d4,# neu
+            "notional_4pct":      n4,
+            "depth_4pct":         d4,
+            "rel_notional_4pct":  rel_n4,
+            "rel_depth_4pct":     rel_d4,
 
-            "notional_5pct":      n5,   # neu
-            "depth_5pct":         d5,   # neu
-            "rel_notional_5pct":  rel_n5,# neu
-            "rel_depth_5pct":     rel_d5,# neu
+            "notional_5pct":      n5,
+            "depth_5pct":         d5,
+            "rel_notional_5pct":  rel_n5,
+            "rel_depth_5pct":     rel_d5,
 
-            # → Spread‐Features
-            "spread_pct":         spread_pct,   # bleibt (z.B. 2.0)
-            "spread_abs":         spread_abs,   # neu: abs. USD‐Spread
-            "spread_vwap":        spread_vwap,  # neu: VWAP‐Spread
+            # Spread-Features
+            "spread_pct":         spread_pct,
+            "spread_abs":         spread_abs,
+            "spread_vwap":        spread_vwap,
 
-            # → Imbalance (wie bisher)
+            # GARCH-like Volatilität
+            "garch_like_vol":     garch_like_vol,
+
+            # Imbalance (täglich)
             "notional_imbalance": imb_n,
             "depth_imbalance":    imb_d,
 
-            **moments,
+            # Skew/Kurtosis auf oberste 10 % Depth
+            "skew_top10_depth":   skew_top10,
+            "kurt_top10_depth":   kurt_top10,
+
+            # Quantile-Features der stündlichen Depth-Summe
+            "hourly_depth_q10":   depth_hour_q10,
+            "hourly_depth_q90":   depth_hour_q90,
+
+            # Time-of-Day-Segmente (⦿ Notional/Depth Summen)
             "notional_00_08":     seg1["notional"],
             "depth_00_08":        seg1["depth"],
             "notional_08_16":     seg2["notional"],
@@ -283,6 +384,23 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "has_00_08":          not pd.isna(seg1["notional"]),
             "has_08_16":          not pd.isna(seg2["notional"]),
             "has_16_24":          not pd.isna(seg3["notional"]),
+
+            # Intraday-Volatilität (pro Stunde)
+            "intraday_notional_var": intraday_notional_var,
+            "max_hourly_notional":   max_hourly_notional,
+            "intraday_depth_var":    intraday_depth_var,
+            "max_hourly_depth":      max_hourly_depth,
+
+            # Time-of-Day-Spreads (in %)
+            "spread_00_08":         spread_00_08,
+            "spread_08_16":         spread_08_16,
+            "spread_16_24":         spread_16_24,
+
+            # Time-of-Day-Imbalances
+            "imb_00_08":            imb_00_08,
+            "imb_08_16":            imb_08_16,
+            "imb_16_24":            imb_16_24,
+
             "has_data":           has_data,
         })
 
@@ -291,35 +409,32 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
     df = pd.DataFrame(rows).set_index("date")
     df.index.name = "date"
 
-    # ─── Duplication-Flag endgültig setzen (unverändert) ───
-    prev_not = None
-    prev_dep = None
+    # ─── A) Toleranz-basiertes Duplication-Flag & Interpolations-Flag ───
     df["dup_flag"] = 0
+    df["interpolation_flag"] = df["file_exists"].apply(lambda x: 1 if not x else 0)
     prev_not = None
     prev_dep = None
     for idx in df.index:
         cur_not = df.at[idx, "total_notional"]
         cur_dep = df.at[idx, "total_depth"]
 
-        # Wenn wir einen Vortag haben, prüfen wir auf Duplikat
-        if (prev_not is not None) and (prev_dep is not None):
-            if (cur_not == prev_not) and (cur_dep == prev_dep):
+        if (prev_not is not None) and (prev_dep is not None) and (prev_not != 0) and (prev_dep != 0):
+            rel_diff_not = abs(cur_not - prev_not) / prev_not
+            rel_diff_dep = abs(cur_dep - prev_dep) / prev_dep
+            if (rel_diff_not < 0.001) and (rel_diff_dep < 0.001):
                 df.at[idx, "dup_flag"] = 1
 
-        # Ganz wichtig: prev_not und prev_dep hier AUßERHALB des if setzen,
-        # damit sie ab dem 2. Schleifendurchlauf nicht mehr None sind.
         prev_not = cur_not
         prev_dep = cur_dep
 
     return df
 
-
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     """
     Berechnung rollierender Fenster und Microstructure Features.
-    Ohne fillna(0) – stattdessen has_* Flags und ML‐freundliches Lückenhandling.
+    Ohne fillna(0) – stattdessen has_* Flags und ML-freundliches Lückenhandling.
     """
-    # ── Rollende Imbalance-Fenster (wie vorher) ──
+    # ── Rollende Imbalance-Fenster (wie bisher) ──
     def mean_if_real_change(x):
         changes = x.diff().abs() > 0
         if changes.sum() >= 1:
@@ -336,6 +451,10 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
             )
             df[f"has_{col}"] = df[col].notna().astype(int)
 
+    # ─── C) NEU: EWMA der Notional-Imbalance ───
+    df["imbalance_ewma_7d"]    = df["notional_imbalance"].ewm(span=7, min_periods=3).mean()
+    df["has_imbalance_ewma_7d"] = df["imbalance_ewma_7d"].notna().astype(int)
+
     # VPIN (mindestens 1 Wert)
     df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
 
@@ -343,7 +462,7 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df["mid_price"] = (df.total_notional / df.total_depth).replace([np.inf, -np.inf], np.nan)
     df["ret"]       = df.mid_price.pct_change(fill_method=None).abs()
 
-    # Kyle Lambda
+    # Kyle Lambda (30 Tage)
     w = 30
     kl = []
     for i in range(len(df)):
@@ -359,48 +478,64 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"kyle_lambda_roll_{w}d"]     = kl
     df[f"has_kyle_lambda_roll_{w}d"] = pd.Series(kl).notna().astype(int).values
 
-    # Amihud (ohne Fillna)
+    # Amihud (30 Tage)
     ai      = df.ret / df.total_notional.replace(0, np.nan)
     roll_ai = ai.rolling(window=w, min_periods=w).mean()
     df[f"amihud_roll_{w}d"]     = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna().astype(int)
 
-    # ── Liquidity Slopes über 30 Tage für rel_depth_1pct … rel_depth_5pct ──
-    window = 30
-    # Lege leere Listen an für alle 5 Level
+    # ── C) Liquidity Slopes über 30 Tage für rel_depth_1…5pct ──
     slopes = {f"rel{level}": [] for level in (1,2,3,4,5)}
-
-    # Iteriere durch jeden Datumseintrag
     for i in range(len(df)):
-        if i < window:
-            # Weniger als 30 Tage vorhanden → immer NaN
+        if i < w:
             for level in (1,2,3,4,5):
                 slopes[f"rel{level}"].append(np.nan)
         else:
-            sub = df.iloc[i-window+1 : i+1]
-            # Für jedes Level X führen wir Regression: spread_vwap  ~  rel_depth_Xpct
+            sub = df.iloc[i-w+1 : i+1]
             for level in (1,2,3,4,5):
                 col_in = f"rel_depth_{level}pct"
                 y_vals = sub["spread_vwap"].values
                 X_vals = sub[col_in].values.reshape(-1, 1)
-                # Filtere nur gültige Paare
                 mask = (~np.isnan(X_vals.flatten())) & (~np.isnan(y_vals))
                 if mask.sum() >= 2:
                     coef = LinearRegression().fit(X_vals[mask], y_vals[mask]).coef_[0]
                 else:
                     coef = np.nan
                 slopes[f"rel{level}"].append(coef)
-
-    # Weise die berechneten Slope‐Listen dem DataFrame zu
     for level in (1,2,3,4,5):
-        col_out = f"liq_slope_roll_{window}d_rel{level}pct"
-        flag_out = f"has_liq_slope_roll_{window}d_rel{level}pct"
+        col_out = f"liq_slope_roll_{w}d_rel{level}pct"
+        flag_out = f"has_liq_slope_roll_{w}d_rel{level}pct"
         df[col_out] = slopes[f"rel{level}"]
         df[flag_out] = df[col_out].notna().astype(int)
 
-    # Entferne nur MidPrice (Ret bleibt erhalten, falls gewünscht)
+    # ── C) Liquidity Slopes über 7 Tage für rel_depth_1…5pct ──
+    short_w = 7
+    slopes7 = {f"rel{lvl}_short": [] for lvl in (1,2,3,4,5)}
+    for i in range(len(df)):
+        if i < short_w:
+            for lvl in (1,2,3,4,5):
+                slopes7[f"rel{lvl}_short"].append(np.nan)
+        else:
+            sub7 = df.iloc[i-short_w+1 : i+1]
+            for lvl in (1,2,3,4,5):
+                col_in = f"rel_depth_{lvl}pct"
+                Xv = sub7[col_in].values.reshape(-1,1)
+                Yv = sub7["spread_vwap"].values
+                mask7 = (~np.isnan(Xv.flatten())) & (~np.isnan(Yv))
+                if mask7.sum() >= 2:
+                    coef7 = LinearRegression().fit(Xv[mask7], Yv[mask7]).coef_[0]
+                else:
+                    coef7 = np.nan
+                slopes7[f"rel{lvl}_short"].append(coef7)
+    for lvl in (1,2,3,4,5):
+        col7 = f"liq_slope_roll_{short_w}d_rel{lvl}pct"
+        flag7 = f"has_liq_slope_roll_{short_w}d_rel{lvl}pct"
+        df[col7] = slopes7[f"rel{lvl}_short"]
+        df[flag7] = df[col7].notna().astype(int)
+
+    # Entferne MidPrice (Ret bleibt erhalten)
     return df.drop(columns=["mid_price"], errors="ignore")
-    
+
 def process_symbol(symbol: str, start_date: str, end_date: str):
     # a) parse dates
     if start_date and end_date:
@@ -484,13 +619,12 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     os.rename(tmp_out_file, final_out_file)
 
     # 4. Git-Staging: füge neues File hinzu und entferne die alten
-    import subprocess
     subprocess.run(["git", "add", final_out_file], check=True)
     for old in removed:
         subprocess.run(["git", "rm", "--quiet", old], check=True)
 
     print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
-    
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--symbol",      required=True)
@@ -498,7 +632,6 @@ def main():
     p.add_argument("--end-date",    default=None)
     args = p.parse_args()
     process_symbol(args.symbol, args.start_date, args.end_date)
-
 
 if __name__ == "__main__":
     main()
