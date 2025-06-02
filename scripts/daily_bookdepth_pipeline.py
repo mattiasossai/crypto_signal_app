@@ -621,10 +621,10 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     # 4. Git-Staging: füge neues File hinzu und entferne die alten
     subprocess.run(["git", "add", final_out_file], check=True)
     for old in removed:
-    try:
-        subprocess.run(["git", "rm", "--quiet", old], check=True)
-    except subprocess.CalledProcessError:
-        logger.warning(f"Could not `git rm` {old} (vielleicht bereits gestaged), überspringe.")
+        try:
+            subprocess.run(["git", "rm", "--quiet", old], check=True)
+        except subprocess.CalledProcessError:
+            logger.warning(f"Could not `git rm` {old} (vielleicht bereits gestaged), überspringe.")
 
     print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
 
