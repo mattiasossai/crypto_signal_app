@@ -215,14 +215,22 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
     prev_not = None
     prev_dep = None
     df["dup_flag"] = 0
+    prev_not = None
+    prev_dep = None
     for idx in df.index:
         cur_not = df.at[idx, "total_notional"]
         cur_dep = df.at[idx, "total_depth"]
-        if prev_not is not None and prev_dep is not None:
+
+        # Wenn wir einen Vortag haben, prüfen wir auf Duplikat
+        if (prev_not is not None) and (prev_dep is not None):
             if (cur_not == prev_not) and (cur_dep == prev_dep):
                 df.at[idx, "dup_flag"] = 1
-            prev_not = cur_not
-            prev_dep = cur_dep
+
+        # Ganz wichtig: prev_not und prev_dep hier AUßERHALB des if setzen,
+        # damit sie ab dem 2. Schleifendurchlauf nicht mehr None sind.
+        prev_not = cur_not
+        prev_dep = cur_dep
+
     return df
 
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
