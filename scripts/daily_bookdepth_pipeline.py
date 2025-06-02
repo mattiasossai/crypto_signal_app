@@ -244,11 +244,12 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "dep_kurt":   kurtosis(d, bias=False) if len(d) > 1 else np.nan,
         }
 
-        # ─── NEU: Skew/Kurtosis nur auf oberste 10 % Depth-Volumina ───
+        # ─── NEU: Skew/Kurtosis nur auf oberste 10 % Depth-Volumina (ohne Präzisions‐Warnung) ───
         if not sl.empty:
             depth_90 = sl["depth"].quantile(0.90)
             top10 = sl.loc[sl["depth"] >= depth_90, "depth"]
-            if len(top10) > 1:
+            # Falls weniger als 2 Werte ODER alle Werte identisch, dann NaN:
+            if len(top10) > 1 and top10.nunique() > 1:
                 skew_top10 = skew(top10, bias=False)
                 kurt_top10 = kurtosis(top10, bias=False)
             else:
