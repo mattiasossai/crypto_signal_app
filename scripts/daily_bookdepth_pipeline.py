@@ -236,25 +236,23 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     """
     Berechnung rollierender Fenster und Microstructure Features.
-    Ohne fillna(0) – stattdessen has_* Flags und ML-freundliches Lückenhandling.
+    Ohne fillna(0) – stattdessen has_* Flags und ML‐freundliches Lückenhandling.
     """
-    # Rollende Imbalance-Fenster (nur wenn im Fenster echte Änderung stattfand)
+    # ── Rollende Imbalance-Fenster (wie vorher) ──
     def mean_if_real_change(x):
-        # x ist ein Pandas Series der Länge w. Nur rechnen, wenn es tatsächlich ≥1 Änderung gab:
         changes = x.diff().abs() > 0
         if changes.sum() >= 1:
             return x.mean()
         return np.nan
 
-    for w in (7,14,21):
-        for base in ("notional_imbalance","depth_imbalance"):
+    for w in (7, 14, 21):
+        for base in ("notional_imbalance", "depth_imbalance"):
             col = f"{base}_roll_{w}d"
-            # apply(mean_if_real_change) wird nur aufgerufen, wenn min_periods erfüllt
             df[col] = (
                 df[base]
-                    .rolling(window=w, min_periods=w)
-                    .apply(mean_if_real_change, raw=False)
-                 )
+                  .rolling(window=w, min_periods=w)
+                  .apply(mean_if_real_change, raw=False)
+            )
             df[f"has_{col}"] = df[col].notna().astype(int)
                 
     # VPIN (mindestens 1 Wert)
@@ -286,28 +284,26 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"amihud_roll_{w}d"]     = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna().astype(int)
 
-    def compute_liq_slope(x):
-        """
-        x ist ein Array (w × 2) mit den Spalten [rel_depth_1pct, spread_pct].
-        Wenn <2 gültige Paare → return np.nan, sonst slope via LinearRegression.
-        """
-        df_sub = pd.DataFrame(x, columns=["rel_depth_1pct", "spread_pct"])
-        X_vals = df_sub["rel_depth_1pct"].values.reshape(-1,1)
-        y_vals = df_sub["spread_pct"].values
-        valid = (~np.isnan(X_vals.flatten())) & (~np.isnan(y_vals))
-        if valid.sum() < 2:
-            return np.nan
-        lr = LinearRegression().fit(X_vals[valid], y_vals[valid])
-        return lr.coef_[0]
+    # ── Liquidity Slope (30 Tage) ──
+    ls = []
+    for i in range(len(df)):
+        if i < w:
+            # Kein volles 30-Tage-Fenster → NaN
+            ls.append(np.nan)
+        else:
+            sub = df.iloc[i-w+1 : i+1]
+            X_vals = sub.rel_depth_1pct.values.reshape(-1, 1)
+            y_vals = sub.spread_pct.values
+            m = (~np.isnan(X_vals.flatten())) & (~np.isnan(y_vals))
+            # Nur regressieren, wenn mindestens 2 gültige Paare
+            if m.sum() >= 2:
+                coef = LinearRegression().fit(X_vals[m], y_vals[m]).coef_[0]
+            else:
+                coef = np.nan
+            ls.append(coef)
 
-    # Wir bauen ein DataFrame mit den zwei Spalten, damit .apply beide sieht:
-    df_two = df[["rel_depth_1pct", "spread_pct"]]
-    df["liq_slope_roll_30d"] = (
-        df_two
-            .rolling(window=w, min_periods=w)
-            .apply(lambda arr: compute_liq_slope(arr), raw=False)
-    )
-    df["has_liq_slope_roll_30d"] = df["liq_slope_roll_30d"].notna().astype(int)
+    df[f"liq_slope_roll_{w}d"]     = ls
+    df[f"has_liq_slope_roll_{w}d"] = pd.Series(ls).notna().astype(int).values
 
     # MidPrice und ret können für ML als Features genutzt werden oder hier entfernt werden:
     return df.drop(columns=["mid_price"], errors="ignore")
