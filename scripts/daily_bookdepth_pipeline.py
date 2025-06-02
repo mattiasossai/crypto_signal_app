@@ -140,9 +140,19 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         n10, d10 = sl.loc[m10,"notional"].sum(), sl.loc[m10,"depth"].sum()
         rel_n1 = n1/tot_not if tot_not else np.nan
         rel_d1 = d1/tot_dep if tot_dep else np.nan
-        p_min = sl.loc[sl["percentage"]>0, "percentage"].min() or 0
-        n_max = sl.loc[sl["percentage"]<0, "percentage"].max() or 0
-        spread_pct = p_min + abs(n_max)
+        # 1) Sortiere die Prozentsätze
+        pos = sl.loc[sl["percentage"] > 0, "percentage"].sort_values()
+        neg = sl.loc[sl["percentage"] < 0, "percentage"].sort_values()
+        if len(pos) >= 1 and len(neg) >= 1:
+            # Engster Ask = pos.iloc[0], Engster Bid = neg.iloc[-1]
+            # Dann prozentualer Spread (z.B. (Ask - Bid)/Ask) oder einfach Summe:
+            p_ask  = pos.iloc[0]
+            p_bid  = neg.iloc[-1]
+            # tatsächliche Spread-Distanz in Prozentpunkten
+            spread_pct = p_ask + abs(p_bid)
+        else:
+            spread_pct = np.nan
+            
         bid_n = sl.loc[sl["percentage"]<0, "notional"].sum()
         ask_n = sl.loc[sl["percentage"]>0, "notional"].sum()
         imb_n = (bid_n-ask_n)/tot_not if tot_not else np.nan
@@ -173,6 +183,9 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "has_depth":          tot_dep>0,
             "total_notional":     tot_not,
             "total_depth":        tot_dep,
+            # ─── Duplication-Flag (falls heute denselben Wert wie gestern liefert) ───
+            # Wir setzen dup_flag=1, wenn total_notional & total_depth identisch zum Vortag sind.
+            "dup_flag":           None,
             "notional_1pct":      n1,
             "depth_1pct":         d1,
             "rel_notional_1pct":  rel_n1,
@@ -197,6 +210,19 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 
     df = pd.DataFrame(rows).set_index("date")
     df.index.name = "date"
+    # ─── Duplication-Flag endgültig setzen ───
+    # Wenn total_notional und total_depth an Tag t gleich dem Vortag sind, dup_flag=1, sonst 0.
+    prev_not = None
+    prev_dep = None
+    df["dup_flag"] = 0
+    for idx in df.index:
+        cur_not = df.at[idx, "total_notional"]
+        cur_dep = df.at[idx, "total_depth"]
+        if prev_not is not None and prev_dep is not None:
+            if (cur_not == prev_not) and (cur_dep == prev_dep):
+                df.at[idx, "dup_flag"] = 1
+            prev_not = cur_not
+            prev_dep = cur_dep
     return df
 
 def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
@@ -204,14 +230,25 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     Berechnung rollierender Fenster und Microstructure Features.
     Ohne fillna(0) – stattdessen has_* Flags und ML-freundliches Lückenhandling.
     """
-    # Rollende Imbalance-Fenster
+    # Rollende Imbalance-Fenster (nur wenn im Fenster echte Änderung stattfand)
+    def mean_if_real_change(x):
+        # x ist ein Pandas Series der Länge w. Nur rechnen, wenn es tatsächlich ≥1 Änderung gab:
+        changes = x.diff().abs() > 0
+        if changes.sum() >= 1:
+            return x.mean()
+        return np.nan
+
     for w in (7,14,21):
         for base in ("notional_imbalance","depth_imbalance"):
             col = f"{base}_roll_{w}d"
-            roll = df[base].rolling(window=w, min_periods=w).mean()
-            df[col]          = roll
-            df[f"has_{col}"] = roll.notna().astype(int)
-
+            # apply(mean_if_real_change) wird nur aufgerufen, wenn min_periods erfüllt
+            df[col] = (
+                df[base]
+                    .rolling(window=w, min_periods=w)
+                    .apply(mean_if_real_change, raw=False)
+                 )
+            df[f"has_{col}"] = df[col].notna().astype(int)
+                
     # VPIN (mindestens 1 Wert)
     df["vpin"] = df.notional_imbalance.abs().rolling(window=50, min_periods=1).mean()
 
@@ -241,20 +278,28 @@ def add_rolling_micro(df: pd.DataFrame) -> pd.DataFrame:
     df[f"amihud_roll_{w}d"]     = roll_ai
     df[f"has_amihud_roll_{w}d"] = roll_ai.notna().astype(int)
 
-    # Liquidity Slope (unverändert)
-    ls = []
-    for i in range(len(df)):
-        if i < w:
-            ls.append(np.nan)
-        else:
-            sub = df.iloc[i-w+1:i+1]
-            X = sub.rel_depth_1pct.values.reshape(-1,1)
-            y = sub.spread_pct.values
-            m = (~np.isnan(X.flatten())) & (~np.isnan(y))
-            coef = LinearRegression().fit(X[m], y[m]).coef_[0] if m.sum()>=2 else np.nan
-            ls.append(coef)
-    df[f"liq_slope_roll_{w}d"]     = ls
-    df[f"has_liq_slope_roll_{w}d"] = pd.Series(ls).notna().astype(int).values
+    def compute_liq_slope(x):
+        """
+        x ist ein Array (w × 2) mit den Spalten [rel_depth_1pct, spread_pct].
+        Wenn <2 gültige Paare → return np.nan, sonst slope via LinearRegression.
+        """
+        df_sub = pd.DataFrame(x, columns=["rel_depth_1pct", "spread_pct"])
+        X_vals = df_sub["rel_depth_1pct"].values.reshape(-1,1)
+        y_vals = df_sub["spread_pct"].values
+        valid = (~np.isnan(X_vals.flatten())) & (~np.isnan(y_vals))
+        if valid.sum() < 2:
+            return np.nan
+        lr = LinearRegression().fit(X_vals[valid], y_vals[valid])
+        return lr.coef_[0]
+
+    # Wir bauen ein DataFrame mit den zwei Spalten, damit .apply beide sieht:
+    df_two = df[["rel_depth_1pct", "spread_pct"]]
+    df["liq_slope_roll_30d"] = (
+        df_two
+            .rolling(window=w, min_periods=w)
+            .apply(lambda arr: compute_liq_slope(arr), raw=False)
+    )
+    df["has_liq_slope_roll_30d"] = df["liq_slope_roll_30d"].notna().astype(int)
 
     # MidPrice und ret können für ML als Features genutzt werden oder hier entfernt werden:
     return df.drop(columns=["mid_price"], errors="ignore")
