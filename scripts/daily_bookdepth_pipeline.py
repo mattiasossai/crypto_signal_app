@@ -217,7 +217,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             sl2 = sl.copy()
             mid_price = tot_not / tot_dep
             sl2["price"] = mid_price * (1 + sl2["percentage"]/100)
-            hourly_mid = sl2["price"].resample("1H").last().ffill()
+            hourly_mid = sl2["price"].resample("h").last().ffill()
             garch_like_vol = hourly_mid.pct_change().dropna().std(ddof=0)
         else:
             garch_like_vol = np.nan
@@ -260,7 +260,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 
         # ─── NEU: Quantil-Features der stündlichen Depth-Summe ───
         if not sl.empty:
-            hourly_depth_sum = sl["depth"].resample("1H").sum().dropna()
+            hourly_depth_sum = sl["depth"].resample("h").sum().dropna()
             depth_hour_q10 = hourly_depth_sum.quantile(0.10)
             depth_hour_q90 = hourly_depth_sum.quantile(0.90)
         else:
@@ -274,11 +274,11 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 
         # ─── NEU: Intraday-Volatilität (Varianz & Max) pro Stunde ───
         if not sl.empty:
-            hourly_not = sl["notional"].resample("1H").sum()
+            hourly_not = sl["notional"].resample("h").sum()
             intraday_notional_var = hourly_not.var(ddof=0)
             max_hourly_notional   = hourly_not.max()
 
-            hourly_dep = sl["depth"].resample("1H").sum()
+            hourly_dep = sl["depth"].resample("h").sum()
             intraday_depth_var = hourly_dep.var(ddof=0)
             max_hourly_depth   = hourly_dep.max()
         else:
@@ -621,7 +621,10 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     # 4. Git-Staging: füge neues File hinzu und entferne die alten
     subprocess.run(["git", "add", final_out_file], check=True)
     for old in removed:
+    try:
         subprocess.run(["git", "rm", "--quiet", old], check=True)
+    except subprocess.CalledProcessError:
+        logger.warning(f"Could not `git rm` {old} (vielleicht bereits gestaged), überspringe.")
 
     print(f"✅ {symbol}: written {len(df_upd)} days to {final_out_file}")
 
