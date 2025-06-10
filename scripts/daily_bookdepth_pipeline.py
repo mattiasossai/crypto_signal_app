@@ -599,6 +599,27 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     df_all = pd.concat([df_old, df_new]).sort_index()
     df_upd = add_rolling_micro(df_all)
 
+    # ─── Ausnahme‐Liste für Prüffelder, die wir auch bei Konstanz behalten ───
+    keep_if_constant = [
+        "file_exists",
+        "has_notional",
+        "has_depth",
+        "has_data",
+        "has_00_08",
+        "has_08_16",
+        "has_16_24",
+        "dup_flag",
+        "interpolation_flag",
+    ]
+
+    # ─── Alle konstanten Spalten (nunique==1) ermitteln, minus die Ausnahmen ───
+    all_const = [col for col in df_upd.columns
+                 if df_upd[col].nunique(dropna=False) == 1]
+    to_drop   = [col for col in all_const if col not in keep_if_constant]
+    if to_drop:
+        logger.info(f"Entferne konstante Spalten: {to_drop}")
+        df_upd = df_upd.drop(columns=to_drop)
+        
     # 1. Schreibe temporär
     tmp_out_file = os.path.join(out_dir, f"{symbol}-features-temp.parquet")
     df_upd.to_parquet(tmp_out_file, compression="snappy")
