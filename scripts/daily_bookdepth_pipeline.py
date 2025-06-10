@@ -614,7 +614,7 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
 
     # ─── 1) Finde alle konstanten Spalten und logge sie ───
     all_const = [col for col in df_upd.columns
-                 if df_upd[col].nunique(dropna=False) == 1]
+                 if df_upd[col].nunique(dropna=True) == 1]
     logger.info(f"=== Konstant erkannte Spalten insgesamt: {all_const}")
 
     # ─── 2) Filtere Ausnahmen heraus, droppe den Rest ───
