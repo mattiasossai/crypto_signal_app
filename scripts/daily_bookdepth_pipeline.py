@@ -212,16 +212,6 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         else:
             spread_vwap = np.nan
 
-        # 7) GARCH-like Tages-Volatilität von spread_vwap (Proxy über mid_price-Änderung)
-        if not sl.empty and tot_dep:
-            sl2 = sl.copy()
-            mid_price = tot_not / tot_dep
-            sl2["price"] = mid_price * (1 + sl2["percentage"]/100)
-            hourly_mid = sl2["price"].resample("h").last().ffill()
-            garch_like_vol = hourly_mid.pct_change().dropna().std(ddof=0)
-        else:
-            garch_like_vol = np.nan
-
         # 8) Bid/Ask-Imbalance (täglich)
         bid_n = sl.loc[sl["percentage"] < 0, "notional"].sum()
         ask_n = sl.loc[sl["percentage"] > 0, "notional"].sum()
@@ -318,6 +308,26 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         else:
             imb_16_24 = np.nan
 
+        # ─── Neu: Depth-Imbalance-Speed & Update-Rate & Liquidity-Pressure-Index ───
+
+        # 1) Depth-Imbalance-Speed (absolut pro Minute)
+        #    Veränderung der depth_imbalance resampled auf 1-Minuten-Intervalle
+        imb_min = sl["depth_imbalance"] \
+                    .resample("1min").last().ffill() \
+                    .diff().abs()
+        depth_imb_speed_mean = imb_min.mean()
+        depth_imb_speed_max  = imb_min.max()
+
+        # 2) Orderbook-Update-Rate (Anzahl Events pro Minute)
+        evt_min        = sl.groupby(pd.Grouper(freq="1min")).size()
+        upd_rate_mean  = evt_min.mean()
+        upd_rate_max   = evt_min.max()
+
+        # 3) Liquidity-Pressure-Index (Speed × Update-Rate)
+        lpi_min = imb_min * evt_min
+        lpi_mean = lpi_min.mean()
+        lpi_max  = lpi_min.max()
+
         # 11) rows.append mit allen Feldern
         rows.append({
             "date":               day,
@@ -360,12 +370,21 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "spread_abs":         spread_abs,
             "spread_vwap":        spread_vwap,
 
-            # GARCH-like Volatilität
-            "garch_like_vol":     garch_like_vol,
-
             # Imbalance (täglich)
             "notional_imbalance": imb_n,
             "depth_imbalance":    imb_d,
+
+            # ― Neu: Depth-Imbalance-Speed (Δ depth_imbalance / Min)
+            "depth_imb_speed_mean": depth_imb_speed_mean,
+            "depth_imb_speed_max":  depth_imb_speed_max,
+
+            # ― Neu: Orderbook-Update-Rate (Events/Min)
+            "upd_rate_mean":        upd_rate_mean,
+            "upd_rate_max":         upd_rate_max,
+
+            # ― Neu: Liquidity-Pressure-Index (Speed×Rate)
+            "lpi_mean":             lpi_mean,
+            "lpi_max":              lpi_max,
 
             # Skew/Kurtosis auf oberste 10 % Depth
             "skew_top10_depth":   skew_top10,
