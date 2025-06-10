@@ -612,18 +612,22 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         "interpolation_flag",
     ]
 
-    # ─── Alle konstanten Spalten (nunique==1) ermitteln, minus die Ausnahmen ───
+    # ─── 1) Finde alle konstanten Spalten und logge sie ───
     all_const = [col for col in df_upd.columns
                  if df_upd[col].nunique(dropna=False) == 1]
-    to_drop   = [col for col in all_const if col not in keep_if_constant]
+    logger.info(f"=== Konstant erkannte Spalten insgesamt: {all_const}")
+
+    # ─── 2) Filtere Ausnahmen heraus, droppe den Rest ───
+    to_drop = [col for col in all_const if col not in keep_if_constant]
+    logger.info(f"=== Spalten zum Droppen (nach Ausnahmen): {to_drop}")
     if to_drop:
-        logger.info(f"Entferne konstante Spalten: {to_drop}")
         df_upd = df_upd.drop(columns=to_drop)
-        
+        logger.info(f"=== Nach Drop verbleibende Spalten: {list(df_upd.columns)}")
+
     # 1. Schreibe temporär
     tmp_out_file = os.path.join(out_dir, f"{symbol}-features-temp.parquet")
     df_upd.to_parquet(tmp_out_file, compression="snappy")
-
+    
     # 2. Lösche alle alten Parquets (außer temp) und sammle sie
     removed = []
     for old in glob.glob(os.path.join(out_dir, f"{symbol}-features-*_to_*.parquet")):
