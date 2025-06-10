@@ -612,9 +612,9 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         "interpolation_flag",
     ]
 
-    # ─── 1) Finde alle konstanten Spalten und logge sie ───
+    # Konstant, wenn nach Entfernen der NaNs ≤1 einziger Wert übrig bleibt
     all_const = [col for col in df_upd.columns
-                 if df_upd[col].nunique(dropna=True) == 1]
+                 if df_upd[col].dropna().nunique() <= 1]
     logger.info(f"=== Konstant erkannte Spalten insgesamt: {all_const}")
 
     # ─── 2) Filtere Ausnahmen heraus, droppe den Rest ───
