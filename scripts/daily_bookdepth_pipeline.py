@@ -70,18 +70,18 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     EXPECTED = ["timestamp", "percentage", "depth", "notional"]
 
     file_exists = os.path.exists(csv_fp)
-     if not file_exists:
-         logger.warning(f"{os.path.basename(csv_fp)}: Datei fehlt, übersprungen")
-         empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
-         return empty, False, False
-
+    if not file_exists:
+        logger.warning(f"{os.path.basename(csv_fp)}: Datei fehlt, übersprungen")
+        empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
+        return empty, False, False       #  slice (empty DF), file_exists=False, has_data=False
+        
     # 1) Versuch Headerful
     try:
         df = pd.read_csv(csv_fp, header=0)
     except Exception as e:
         logger.error(f"{os.path.basename(csv_fp)}: Fehler beim Einlesen headerful: {e}")
         empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
-        return empty, False
+        return empty, False, False       #  slice (empty DF), file_exists=False, has_data=False
 
     lower = [c.lower() for c in df.columns]
     if set(EXPECTED).issubset(lower):
@@ -99,7 +99,7 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
         if df.shape[1] < len(EXPECTED):
             logger.error(f"{os.path.basename(csv_fp)}: headerless erwartet ≥{len(EXPECTED)} Spalten, hat {df.shape[1]}")
             empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
-            return empty, False
+            return empty, False, False    #  slice (empty DF), file_exists=False, has_data=False
         df = df.iloc[:, :len(EXPECTED)]
         df.columns = EXPECTED
 
@@ -121,7 +121,7 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     sl = df.loc[(df.index >= day) & (df.index < next_day)]
     has_data = not sl.empty
     logger.info(f"{os.path.basename(csv_fp)}: gelesen {len(df)} Zeilen, gesliced {len(sl)}")
-    return sl, True, has_data
+    return sl, True, has_data    #  slice (echte Daten oder empty), file_exists=True, has_data=not sl.empty
 
 def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp):
     """
@@ -146,16 +146,16 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         sl, file_exists, has_data = parse_csv_to_df(csv_fp, day)
 
         # ─── Ausschlussliste für automatische has_-Flags ───
-         exclude_from_flag = {
-             "date",
-             "dup_flag",
-             "interpolation_flag",
-             "file_exists",
-             "has_notional",
-             "has_depth",
-             "has_data",
-             "total_notional",
-             "total_depth",
+        exclude_from_flag = {
+            "date",
+            "dup_flag",
+            "interpolation_flag",
+            "file_exists",
+            "has_notional",
+            "has_depth",
+            "has_data",
+            "total_notional",
+            "total_depth",
          }
 
         # ─── Neuer Block beginnt hier ───
@@ -457,14 +457,15 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "imb_08_16":            imb_08_16,
             "imb_16_24":            imb_16_24,
         }
-        rows.append(row)
 
-# ─── Automatisch zu jedem Feature eine has_<feature>-Flag ergänzen ───
-         for feat, val in list(row.items()):
-             if feat not in exclude_from_flag and not feat.startswith("has_"):
-                 # val ist None oder NaN → Flag=0, sonst 1
-                 flag = int(val is not None and not (isinstance(val, float) and np.isnan(val)))
-                 row[f"has_{feat}"] = flag
+        # ─── Jetzt sofort alle has_<feature> Flags erzeugen ───
+        for feat, val in list(row.items()):
+            if feat not in exclude_from_flag and not feat.startswith("has_"):
+                flag = int(val is not None and not (isinstance(val, float) and np.isnan(val)))
+                row[f"has_{feat}"] = flag
+
+        # ─── Row erst jetzt in die Liste schreiben ───
+        rows.append(row)
 
         # ─── Ende des neuen Blocks ───
 
