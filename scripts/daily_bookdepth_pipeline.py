@@ -638,6 +638,10 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
 
     # ─── 2) Filtere Ausnahmen heraus, droppe den Rest ───
     to_drop = [col for col in all_const if col not in keep_if_constant]
+    to_drop.extend([
+    "liq_slope_roll_30d_rel5pct", "has_liq_slope_roll_30d_rel5pct",
+    "liq_slope_roll_7d_rel5pct",  "has_liq_slope_roll_7d_rel5pct",
+])
     logger.info(f"=== Spalten zum Droppen (nach Ausnahmen): {to_drop}")
     if to_drop:
         df_upd = df_upd.drop(columns=to_drop)
