@@ -308,25 +308,34 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
         else:
             imb_16_24 = np.nan
 
-        # ─── Neu: Depth-Imbalance-Speed & Update-Rate & Liquidity-Pressure-Index ───
+        # ─── Neu: Depth-Imbalance-Speed, Update-Rate & Liquidity-Pressure-Index ───
 
-        # 1) Depth-Imbalance-Speed (absolut pro Minute)
-        #    Veränderung der depth_imbalance resampled auf 1-Minuten-Intervalle
-        imb_min = sl["depth_imbalance"] \
-                    .resample("1min").last().ffill() \
-                    .diff().abs()
+        # a) Zeitreihe der Depth-Imbalance pro Event-Timestamp
+        imb_ts = (
+            sl
+              .assign(is_bid = sl["percentage"] < 0)
+              .groupby([sl.index, "is_bid"])["depth"]
+              .sum()
+              .unstack(fill_value=0)
+        )
+        imb_ts = (imb_ts[True] - imb_ts[False]) / (imb_ts[True] + imb_ts[False])
+
+        # b) Speed: 1-Minuten-Last → ffill → 1-Diff → Absolut
+        imb_min = imb_ts\
+            .resample("1min").last().ffill()\
+            .diff().abs()
         depth_imb_speed_mean = imb_min.mean()
         depth_imb_speed_max  = imb_min.max()
 
-        # 2) Orderbook-Update-Rate (Anzahl Events pro Minute)
-        evt_min        = sl.groupby(pd.Grouper(freq="1min")).size()
-        upd_rate_mean  = evt_min.mean()
-        upd_rate_max   = evt_min.max()
+        # c) Update-Rate: Anzahl Events pro Minute
+        evt_min       = sl.groupby(pd.Grouper(freq="1min")).size()
+        upd_rate_mean = evt_min.mean()
+        upd_rate_max  = evt_min.max()
 
-        # 3) Liquidity-Pressure-Index (Speed × Update-Rate)
-        lpi_min = imb_min * evt_min
-        lpi_mean = lpi_min.mean()
-        lpi_max  = lpi_min.max()
+        # d) Liquidity-Pressure-Index = Speed × Update-Rate
+        lpi = imb_min * evt_min
+        lpi_mean = lpi.mean()
+        lpi_max  = lpi.max()
 
         # 11) rows.append mit allen Feldern
         rows.append({
@@ -629,6 +638,12 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         "has_16_24",
         "dup_flag",
         "interpolation_flag",
+        "depth_imb_speed_mean",
+        "depth_imb_speed_max",
+        "upd_rate_mean",
+        "upd_rate_max",
+        "lpi_mean",
+        "lpi_max",
     ]
 
     # Konstant, wenn nach Entfernen der NaNs ≤1 einziger Wert übrig bleibt
