@@ -69,10 +69,11 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     """
     EXPECTED = ["timestamp", "percentage", "depth", "notional"]
 
-    if not os.path.exists(csv_fp):
-        logger.warning(f"{os.path.basename(csv_fp)}: Datei fehlt, übersprungen")
-        empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
-        return empty, False
+    file_exists = os.path.exists(csv_fp)
+     if not file_exists:
+         logger.warning(f"{os.path.basename(csv_fp)}: Datei fehlt, übersprungen")
+         empty = pd.DataFrame([], columns=EXPECTED[1:], index=pd.DatetimeIndex([], tz="UTC"))
+         return empty, False, False
 
     # 1) Versuch Headerful
     try:
@@ -118,8 +119,9 @@ def parse_csv_to_df(csv_fp: str, day: pd.Timestamp):
     # Tages-Slice
     next_day = day + pd.Timedelta(days=1)
     sl = df.loc[(df.index >= day) & (df.index < next_day)]
+    has_data = not sl.empty
     logger.info(f"{os.path.basename(csv_fp)}: gelesen {len(df)} Zeilen, gesliced {len(sl)}")
-    return sl, not sl.empty
+    return sl, True, has_data
 
 def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd.Timestamp):
     """
@@ -141,7 +143,20 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
 
     for day in days:
         csv_fp = os.path.join(raw_dir, f"{symbol}-bookDepth-{day.strftime('%Y-%m-%d')}.csv")
-        sl, has_data = parse_csv_to_df(csv_fp, day)
+        sl, file_exists, has_data = parse_csv_to_df(csv_fp, day)
+
+        # ─── Ausschlussliste für automatische has_-Flags ───
+         exclude_from_flag = {
+             "date",
+             "dup_flag",
+             "interpolation_flag",
+             "file_exists",
+             "has_notional",
+             "has_depth",
+             "has_data",
+             "total_notional",
+             "total_depth",
+         }
 
         # ─── Neuer Block beginnt hier ───
 
@@ -351,10 +366,11 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             lpi_mean             = np.nan
             lpi_max              = np.nan
 
-        # 11) rows.append mit allen Feldern
-        rows.append({
+        # 11) Basis-Row nur mit den “rohen” Feature-Werten
+        row = {
             "date":               day,
-            "file_exists":        has_data,
+            "file_exists":        file_exists,
+            "has_data":           has_data,
             "has_notional":       tot_not > 0,
             "has_depth":          tot_dep > 0,
             "total_notional":     tot_not,
@@ -400,18 +416,15 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             # ― Neu: Depth-Imbalance-Speed (Δ depth_imbalance / Min)
             "depth_imb_speed_mean": depth_imb_speed_mean,
             "depth_imb_speed_max":  depth_imb_speed_max,
-            "has_depth_imb_speed":  int(not np.isnan(depth_imb_speed_mean)),
 
             # ― Neu: Orderbook-Update-Rate (Events/Min)
             "upd_rate_mean":        upd_rate_mean,
             "upd_rate_max":         upd_rate_max,
-            "has_upd_rate":         int(not np.isnan(upd_rate_mean)),
 
             # ― Neu: Liquidity-Pressure-Index (Speed×Rate)
             "lpi_mean":             lpi_mean,
             "lpi_max":              lpi_max,
-            "has_lpi":              int(not np.isnan(lpi_mean)),
-            
+           
             # Skew/Kurtosis auf oberste 10 % Depth
             "skew_top10_depth":   skew_top10,
             "kurt_top10_depth":   kurt_top10,
@@ -427,10 +440,7 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "depth_08_16":        seg2["depth"],
             "notional_16_24":     seg3["notional"],
             "depth_16_24":        seg3["depth"],
-            "has_00_08":          not pd.isna(seg1["notional"]),
-            "has_08_16":          not pd.isna(seg2["notional"]),
-            "has_16_24":          not pd.isna(seg3["notional"]),
-
+            
             # Intraday-Volatilität (pro Stunde)
             "intraday_notional_var": intraday_notional_var,
             "max_hourly_notional":   max_hourly_notional,
@@ -441,20 +451,20 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "spread_00_08":         spread_00_08,
             "spread_08_16":         spread_08_16,
             "spread_16_24":         spread_16_24,
-            "has_spread_00_08": int(not np.isnan(spread_00_08)),
-            "has_spread_08_16": int(not np.isnan(spread_08_16)),
-            "has_spread_16_24": int(not np.isnan(spread_16_24)),
 
             # Time-of-Day-Imbalances
             "imb_00_08":            imb_00_08,
             "imb_08_16":            imb_08_16,
             "imb_16_24":            imb_16_24,
-            "has_imb_00_08":   int(not np.isnan(imb_00_08)),
-            "has_imb_08_16":   int(not np.isnan(imb_08_16)),
-            "has_imb_16_24":   int(not np.isnan(imb_16_24)),
+        }
+        rows.append(row)
 
-            "has_data":           has_data,
-        })
+# ─── Automatisch zu jedem Feature eine has_<feature>-Flag ergänzen ───
+         for feat, val in list(row.items()):
+             if feat not in exclude_from_flag and not feat.startswith("has_"):
+                 # val ist None oder NaN → Flag=0, sonst 1
+                 flag = int(val is not None and not (isinstance(val, float) and np.isnan(val)))
+                 row[f"has_{feat}"] = flag
 
         # ─── Ende des neuen Blocks ───
 
