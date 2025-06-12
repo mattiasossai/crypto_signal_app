@@ -442,15 +442,15 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "spread_08_16":         spread_08_16,
             "spread_16_24":         spread_16_24,
             "has_spread_00_08": int(not np.isnan(spread_00_08)),
-            "has_spread_08_16": int(not np.isnan(spread_00_08)),
-            "has_spread_16_24": int(not np.isnan(spread_00_08)),
+            "has_spread_08_16": int(not np.isnan(spread_08_16)),
+            "has_spread_16_24": int(not np.isnan(spread_16_24)),
 
             # Time-of-Day-Imbalances
             "imb_00_08":            imb_00_08,
             "imb_08_16":            imb_08_16,
             "imb_16_24":            imb_16_24,
-            "has_imb_00_08":   int(not np.isnan(imb_16_24)),
-            "has_imb_08_16":   int(not np.isnan(imb_16_24)),
+            "has_imb_00_08":   int(not np.isnan(imb_00_08)),
+            "has_imb_08_16":   int(not np.isnan(imb_08_16)),
             "has_imb_16_24":   int(not np.isnan(imb_16_24)),
 
             "has_data":           has_data,
@@ -650,39 +650,13 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
     df_all = pd.concat([df_old, df_new]).sort_index()
     df_upd = add_rolling_micro(df_all)
 
-    # ─── Ausnahme‐Liste für Prüffelder, die wir auch bei Konstanz behalten ───
+    # ─── Ausnahme‐Liste: immer behalten ───
+    # 1) alle Meta-Spalten, 2) automatisch jede Spalte, die mit 'has_' beginnt
     keep_if_constant = [
         "file_exists",
-        "has_notional",
-        "has_depth",
-        "has_data",
-        "has_00_08",
-        "has_08_16",
-        "has_16_24",
         "dup_flag",
         "interpolation_flag",
-        "depth_imb_speed_mean",
-        "depth_imb_speed_max",
-        "upd_rate_mean",
-        "upd_rate_max",
-        "lpi_mean",
-        "lpi_max",
-        # Time-of-Day-Spread-Flags
-        "has_spread_00_08",
-        "has_spread_08_16",
-        "has_spread_16_24",
-        # Time-of-Day-Imbalance-Flags
-        "has_imb_00_08",
-        "has_imb_08_16",
-        "has_imb_16_24",
-        # NEU: Depth-Imbalance-Speed-Flag
-        "has_depth_imb_speed",
-        # NEU: Update-Rate-Flag
-        "has_upd_rate",
-        # NEU: Liquidity-Pressure-Index-Flag
-        "has_lpi",
-        
-    ]
+    ] + [col for col in df_upd.columns if col.startswith("has_")]
 
     # Konstant, wenn nach Entfernen der NaNs ≤1 einziger Wert übrig bleibt
     all_const = [col for col in df_upd.columns
