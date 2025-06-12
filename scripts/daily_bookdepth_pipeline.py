@@ -309,33 +309,47 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             imb_16_24 = np.nan
 
         # ─── Neu: Depth-Imbalance-Speed, Update-Rate & Liquidity-Pressure-Index ───
+        if not sl.empty:
+            # a) minute-resampled Bid vs. Ask-Depths
+            df_bidask = (
+                sl.assign(is_bid=sl["percentage"] < 0)
+                  .set_index(sl.index.floor("1min"))
+                  .groupby([pd.Grouper(freq="1min"), "is_bid"])["depth"]
+                  .sum()
+                  .unstack(fill_value=0)
+            )
+            # Imbalance-Time Series
+            if {True, False}.issubset(df_bidask.columns):
+                imb_ts = (df_bidask[True] - df_bidask[False]) / (df_bidask[True] + df_bidask[False])
+            else:
+                imb_ts = pd.Series(dtype=float)
 
-        # a) Zeitreihe der Depth-Imbalance pro Event-Timestamp
-        imb_ts = (
-            sl
-              .assign(is_bid = sl["percentage"] < 0)
-              .groupby([sl.index, "is_bid"])["depth"]
-              .sum()
-              .unstack(fill_value=0)
-        )
-        imb_ts = (imb_ts[True] - imb_ts[False]) / (imb_ts[True] + imb_ts[False])
+            # 1) Depth-Imbalance-Speed (Δ depth_imbalance / Min)
+            imb_min = imb_ts.diff().abs()
+            depth_imb_speed_mean = imb_min.mean() if not imb_ts.empty else np.nan
+            depth_imb_speed_max  = imb_min.max()  if not imb_ts.empty else np.nan
 
-        # b) Speed: 1-Minuten-Last → ffill → 1-Diff → Absolut
-        imb_min = imb_ts\
-            .resample("1min").last().ffill()\
-            .diff().abs()
-        depth_imb_speed_mean = imb_min.mean()
-        depth_imb_speed_max  = imb_min.max()
+            # 2) Orderbook-Update-Rate (Events/Min)
+            evt_min       = sl.groupby(pd.Grouper(freq="1min")).size()
+            upd_rate_mean = evt_min.mean()
+            upd_rate_max  = evt_min.max()
 
-        # c) Update-Rate: Anzahl Events pro Minute
-        evt_min       = sl.groupby(pd.Grouper(freq="1min")).size()
-        upd_rate_mean = evt_min.mean()
-        upd_rate_max  = evt_min.max()
-
-        # d) Liquidity-Pressure-Index = Speed × Update-Rate
-        lpi = imb_min * evt_min
-        lpi_mean = lpi.mean()
-        lpi_max  = lpi.max()
+            # 3) Liquidity-Pressure-Index = Speed × Rate
+            if not imb_ts.empty:
+                lpi      = imb_min * evt_min
+                lpi_mean = lpi.mean()
+                lpi_max  = lpi.max()
+            else:
+                lpi_mean = np.nan
+                lpi_max  = np.nan
+        else:
+            # kein Daten-Slice → alles NaN
+            depth_imb_speed_mean = np.nan
+            depth_imb_speed_max  = np.nan
+            upd_rate_mean        = np.nan
+            upd_rate_max         = np.nan
+            lpi_mean             = np.nan
+            lpi_max              = np.nan
 
         # 11) rows.append mit allen Feldern
         rows.append({
@@ -386,15 +400,18 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             # ― Neu: Depth-Imbalance-Speed (Δ depth_imbalance / Min)
             "depth_imb_speed_mean": depth_imb_speed_mean,
             "depth_imb_speed_max":  depth_imb_speed_max,
+            "has_depth_imb_speed":  int(not np.isnan(depth_imb_speed_mean)),
 
             # ― Neu: Orderbook-Update-Rate (Events/Min)
             "upd_rate_mean":        upd_rate_mean,
             "upd_rate_max":         upd_rate_max,
+            "has_upd_rate":         int(not np.isnan(upd_rate_mean)),
 
             # ― Neu: Liquidity-Pressure-Index (Speed×Rate)
             "lpi_mean":             lpi_mean,
             "lpi_max":              lpi_max,
-
+            "has_lpi":              int(not np.isnan(lpi_mean)),
+            
             # Skew/Kurtosis auf oberste 10 % Depth
             "skew_top10_depth":   skew_top10,
             "kurt_top10_depth":   kurt_top10,
@@ -424,11 +441,17 @@ def extract_raw_for_days(symbol: str, raw_dir: str, start: pd.Timestamp, end: pd
             "spread_00_08":         spread_00_08,
             "spread_08_16":         spread_08_16,
             "spread_16_24":         spread_16_24,
+            "has_spread_00_08": int(not np.isnan(spread_00_08)),
+            "has_spread_08_16": int(not np.isnan(spread_00_08)),
+            "has_spread_16_24": int(not np.isnan(spread_00_08)),
 
             # Time-of-Day-Imbalances
             "imb_00_08":            imb_00_08,
             "imb_08_16":            imb_08_16,
             "imb_16_24":            imb_16_24,
+            "has_imb_00_08":   int(not np.isnan(imb_16_24)),
+            "has_imb_08_16":   int(not np.isnan(imb_16_24)),
+            "has_imb_16_24":   int(not np.isnan(imb_16_24)),
 
             "has_data":           has_data,
         })
@@ -644,6 +667,21 @@ def process_symbol(symbol: str, start_date: str, end_date: str):
         "upd_rate_max",
         "lpi_mean",
         "lpi_max",
+        # Time-of-Day-Spread-Flags
+        "has_spread_00_08",
+        "has_spread_08_16",
+        "has_spread_16_24",
+        # Time-of-Day-Imbalance-Flags
+        "has_imb_00_08",
+        "has_imb_08_16",
+        "has_imb_16_24",
+        # NEU: Depth-Imbalance-Speed-Flag
+        "has_depth_imb_speed",
+        # NEU: Update-Rate-Flag
+        "has_upd_rate",
+        # NEU: Liquidity-Pressure-Index-Flag
+        "has_lpi",
+        
     ]
 
     # Konstant, wenn nach Entfernen der NaNs ≤1 einziger Wert übrig bleibt
